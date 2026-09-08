@@ -80,7 +80,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.08-02"
+APP_VERSION = "2026.09.08-03"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -1565,6 +1565,8 @@ def _job_public(job: dict) -> dict:
 # 규정 Q&A는 관리자가 공개 여부를 정한다(기본 비공개). 링크가 정적 페이지에 박혀
 # 있으므로, 비공개 상태에서는 내줄 때 <!--QA:BEGIN-->…<!--QA:END--> 구간을 걷어낸다.
 _QA_BLOCK_RE = re.compile(r"[ \t]*<!--QA:BEGIN-->.*?<!--QA:END-->\n?", re.S)
+# 편집위원 전용 문서(기준 개정안) 링크도 같은 방식으로 — 이용자에게는 링크 자체를 내주지 않는다
+_EDITOR_BLOCK_RE = re.compile(r"[ \t]*<!--EDITOR:BEGIN-->.*?<!--EDITOR:END-->\n?", re.S)
 
 
 def _qa_enabled() -> bool:
@@ -1574,20 +1576,22 @@ def _qa_enabled() -> bool:
         return False
 
 
-def _serve_html(name: str) -> str:
+def _serve_html(name: str, request: Request | None = None) -> str:
     html = (APP_DIR / "static" / name).read_text(encoding="utf-8")
     if not _qa_enabled():
         html = _QA_BLOCK_RE.sub("", html)
+    if request is None or not is_editor(request):
+        html = _EDITOR_BLOCK_RE.sub("", html)
     return html
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
-    return _serve_html("index.html")
+def index(request: Request):
+    return _serve_html("index.html", request)
 
 
 @app.get("/guide/style", response_class=HTMLResponse)
-def style_guide():
+def style_guide(request: Request):
     """참고문헌 작성법 가이드 — 접근 코드 없이 공개.
 
     문편협 공통기준의 자료 유형별 표기법 해설. '한국문헌정보학회 참고문헌
@@ -1595,27 +1599,27 @@ def style_guide():
     서비스 체험으로 이어지는 전환 장치다. 예시는 formatter가 실제로
     만들어 내는 출력과 일치하도록 작성·검증한다(test_server 15번 참조).
     """
-    return _serve_html("style_guide.html")
+    return _serve_html("style_guide.html", request)
 
 
 @app.get("/guide/style/detail", response_class=HTMLResponse)
-def style_detail():
+def style_detail(request: Request):
     """참고문헌 작성법 상세 — 접근 코드 없이 공개.
 
     공통기준 전 유형(법령·표준·번역서·비도서 등) + 2025년 4개 학회지 실측 사례 +
     기준 미수록 유형(프리프린트 등)의 APA 준용 권장안. 예시는 전건 실존 검증(2026-08-18).
     """
-    return _serve_html("style_detail.html")
+    return _serve_html("style_detail.html", request)
 
 
 @app.get("/guide/societies", response_class=HTMLResponse)
-def society_guide():
+def society_guide(request: Request):
     """학회별 투고 양식·편집 관행 비교 — 접근 코드 없이 공개.
 
     4개 학회 규정 원문을 조문 단위로 대조한 결과(2026-08-18 검증).
     학회 관계자가 서비스의 존재 이유(같은 기준, 다른 양식·관행)를 볼 수 있는 페이지.
     """
-    return _serve_html("society_guide.html")
+    return _serve_html("society_guide.html", request)
 
 
 # 학회 이름(코드 키) ↔ 학회지 이름 — suggestions.json의 journal 필드와 대조용
@@ -1668,14 +1672,14 @@ def org_preview(org: str = ""):
 
 
 @app.get("/guide", response_class=HTMLResponse)
-def guide():
+def guide(request: Request):
     """이용 안내 — 접근 코드 없이 볼 수 있다.
 
     학회에 서비스를 안내할 때 주소만 적어 보내면 되도록 공개해 둔다.
     코드를 아직 받지 못한 분이 먼저 읽어 보는 것이 이 문서의 쓸모다.
     접속 코드 자체는 문서에 담지 않는다(빈칸으로 두고 학회가 따로 안내).
     """
-    return _serve_html("guide.html")
+    return _serve_html("guide.html", request)
 
 
 @app.get("/guide/qa", response_class=HTMLResponse)
@@ -1683,13 +1687,42 @@ def guide_qa(request: Request):
     """투고규정 Q&A — 관리자가 공개를 켠 경우에만 열린다(관리자는 항상 미리보기 가능)."""
     if not _qa_enabled() and not is_admin(request):
         raise HTTPException(404, "준비 중인 페이지입니다.")
-    return _serve_html("qa.html")
+    return _serve_html("qa.html", request)
 
 
 @app.get("/guide/privacy", response_class=HTMLResponse)
-def guide_privacy():
+def guide_privacy(request: Request):
     """개인정보·원고 처리방침 — 접근 코드 없이 공개."""
-    return _serve_html("privacy.html")
+    return _serve_html("privacy.html", request)
+
+
+_EDITOR_GATE_HTML = """<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow"><title>편집위원 전용 문서 | refcheck</title>
+<style>body{margin:0;font-family:"Pretendard","Malgun Gothic",system-ui,sans-serif;background:#f4f6f9;
+color:#1c2733;line-height:1.7;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.box{background:#fff;border:1px solid #dde4ec;border-radius:14px;padding:28px 32px;max-width:520px;margin:20px}
+h1{font-size:19px;color:#1f4e79;margin:0 0 10px}p{font-size:14px;color:#5b6b7c}
+a{color:#1f4e79;font-weight:700}</style></head><body><div class="box">
+<h1>편집위원 전용 문서입니다</h1>
+<p>「문편협 공통기준 개정(안)」은 네 학회 편집위원·(부)편집위원장께 드리는 논의용 초안이라
+학회에서 받으신 <b>편집위원 코드</b>로 입장하셔야 열립니다.</p>
+<p>코드를 받으셨다면 <a href="/">서비스 첫 화면</a>에서 입장한 뒤 다시 열어 주세요.
+누구나 볼 수 있는 문서는 <a href="/guide/style/detail">참고문헌 작성법 상세</a>에 있습니다.</p>
+</div></body></html>"""
+
+
+@app.get("/guide/standard-revision", response_class=HTMLResponse)
+def standard_revision(request: Request):
+    """문편협 공통기준 개정(안) — 편집위원 이상 전용.
+
+    기준 문언이 불명확하거나 4개 학회지의 해석이 갈리는 항목을 실측(2025년 발행본
+    참고문헌 7,911건)과 함께 정리한 논의용 초안. 확정된 기준이 아니라 제안이므로
+    일반 이용자에게는 링크도 문서도 내주지 않는다(EDITOR 블록·이 게이트).
+    """
+    if not is_editor(request):
+        return HTMLResponse(_EDITOR_GATE_HTML, status_code=403)
+    return _serve_html("standard_revision.html", request)
 
 
 @app.get("/guide/standard.pdf")
