@@ -184,14 +184,16 @@ def format_entry(e: dict) -> str:
         if t == "journal":
             title = sentence_case(title)
             container = title_case(container)
-        elif t in ("book", "report", "thesis", "web"):
+        elif t in ("book", "report", "thesis"):
             # 단독으로 간행되는 저작의 서명은 Title Case(공통기준 Ⅱ-1)(5)).
-            # 학위논문과 웹 단독 문서도 단행본과 같이 다룬다 — 학회 원고형식 예시
+            # 학위논문도 단행본과 같이 다룬다 — 학회 원고형식 예시
             # 'Functional Requirements for Bibliographic Records: Final Report.'도
             # Title Case다. 문장식으로 낮추면 고유명사(Australia 등)까지 뭉개진다.
             title = title_case(title)
             container = title_case(container)
-        elif t in ("newspaper", "conference"):
+        elif t in ("newspaper", "conference", "web"):
+            # 전자자원의 자원명은 문장식, 웹사이트명은 Title Case — 공통기준 6)전자자원 예시
+            # 'McCombes, S. (2020, June 25). How to write a literature review. Scribbr.'
             title = sentence_case(title)
             container = title_case(container)
 
@@ -343,9 +345,13 @@ def format_entry(e: dict) -> str:
         parts.append(f"https://doi.org/{e['doi']}")
     elif e.get("url") and not e.get("doi") and not any(e["url"] in p for p in parts):
         # 출처 접두어 — 공통기준 '국문 웹자료 (출처: URL), 영문 웹자료 (Available: URL)'.
+        # 국문은 '출처:'를 전자자원(web)에만 붙인다. web 분기가 이미 붙여 여기까지 오지
+        # 않으므로 국문은 접두어 없이 주소만 적는다 — 학회 원고형식의 국문 발표집 예시
+        # '국가서지 2030 국제회의 발표집. https://www.oak.go.kr/…'가 접두어 없이 쓴다.
+        # 영문은 단독 저작에도 붙인다 — 같은 예시의
+        # 'Functional Requirements for Bibliographic Records: Final Report. Available: http://…'.
         # 학술지 논문은 'DOI 또는 URL'을 그대로 적으므로 붙이지 않는다.
-        # (보고서가 이 보전 블록을 타면서 원고의 'Available:'이 지워졌다 — 2026-09 실측)
-        prefix = "" if t in ("journal", "newspaper") else ("Available: " if west else "출처: ")
+        prefix = "Available: " if west and t not in ("journal", "newspaper") else ""
         parts.append(prefix + e["url"])
 
     s = " ".join(p for p in parts if p and p.strip())

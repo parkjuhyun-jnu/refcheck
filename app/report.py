@@ -18,7 +18,7 @@ _OK = RGBColor(0x2E, 0x7D, 0x32)
 _AMBER = RGBColor(0x9A, 0x67, 0x00)
 
 STATUS_LABEL = {
-    "verified": "실존 확인", "mismatch": "제목 불일치", "not_found": "미발견",
+    "verified": "실존 확인", "mismatch": "서지 불일치", "not_found": "미발견",
     "suspect": "실존 의심", "link_ok": "링크 정상", "link_dead": "링크 오류",
     "skipped": "대조 생략",
 }

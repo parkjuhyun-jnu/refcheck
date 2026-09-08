@@ -405,7 +405,7 @@ STANDARD_CASES = [
      {"type": "conference", "lang": "ko", "authors": ["국립중앙도서관 국가서지과"], "year": "2023",
       "title": "국가서지 2030 국제회의 발표집",
       "url": "https://www.oak.go.kr/nl-ir/handle/2020.oak/981"},
-     "국립중앙도서관 국가서지과 (2023). 국가서지 2030 국제회의 발표집. 출처: https://www.oak.go.kr/nl-ir/handle/2020.oak/981"),
+     "국립중앙도서관 국가서지과 (2023). 국가서지 2030 국제회의 발표집. https://www.oak.go.kr/nl-ir/handle/2020.oak/981"),
     ("학회 원고형식 — 단체저자는 인명처럼 뒤집지 않는다",
      {"type": "report", "lang": "west", "authors": ["IFLA Study Group on the FRBR"],
       "year": "2009", "title": "Functional Requirements for Bibliographic Records: Final Report",
@@ -418,7 +418,7 @@ STANDARD_CASES = [
     ("주요 오류 유형 5 — 영문 웹자료는 'Available:' 접두어",
      {"type": "web", "lang": "west", "authors": ["Smith, J."], "date": "2020, October 2",
       "title": "A title here", "url": "http://x.org/a"},
-     "Smith, J. (2020, October 2). A Title Here. Available: http://x.org/a"),
+     "Smith, J. (2020, October 2). A title here. Available: http://x.org/a"),
 ]
 # 단행본은 출판지·출판사가 모두 있어야 한다(공통기준 4.2 · 주요 오류 유형 체크리스트)
 STANDARD_VALIDATIONS = [
