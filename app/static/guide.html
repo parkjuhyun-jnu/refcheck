@@ -116,6 +116,7 @@
     line-height:1; margin-top:.4mm;
   }
   ol.steps p{font-size:9.9pt; color:var(--ink2); margin:.8mm 0 0}
+  ol.steps.two{grid-template-columns:1fr 1fr; gap:3mm 7mm} /* 짧은 단계는 2열 — 1면 A4 안에 들어가도록 */
 
   ul.tight{margin:0; padding-left:4.5mm; font-size:9.7pt; color:var(--ink2)}
   ul.tight li{margin-bottom:1mm}
@@ -169,7 +170,7 @@
   }
   @media (max-width:230mm){
     .sheet{width:auto; margin:0; padding:8mm 6mm; min-height:0}
-    .grid3, .grid2{grid-template-columns:1fr}
+    .grid3, .grid2, ol.steps.two{grid-template-columns:1fr}
   }
   @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
 
@@ -199,7 +200,7 @@
   <div class="wrap">
     <h1>참고문헌 검증 서비스 도입 안내</h1>
     <div class="psub">· 문헌정보학 4개 학회 공동 이용 — 한국도서관·정보학회 · 한국문헌정보학회 · 한국비블리아학회 · 한국정보관리학회<br>
-      · KCI·국립중앙도서관·국회도서관·Crossref·ERIC 등 10개 정보원과 대조해 참고문헌의 실존을 검증하고, 미확인 항목엔 RISS 바로 확인 링크를 제공합니다</div>
+      · KCI·RISS·국립중앙도서관·국회도서관·Crossref·ERIC 등 11개 정보원과 자동 대조해 참고문헌의 실존을 검증하고, 국내 논문은 KCI와 RISS를 교차 확인합니다. 그래도 확인되지 않은 항목에는 RISS 검색 링크를 붙여 드립니다</div>
     <nav class="gnav">
       <a href="/guide" class="on">도입 안내</a>
       <a href="/guide/societies">편집 관행 비교</a>
@@ -261,7 +262,7 @@
       </div>
       <div class="card">
         <h3>실존 검증</h3>
-        <p>아홉 곳의 서지 데이터베이스와 대조합니다. 어디에서도 찾지 못한 문헌은 <strong>실존 의심</strong>으로 표시해, 생성형 AI가 지어낸 인용을 걸러냅니다.</p>
+        <p>열한 곳의 정보원과 대조합니다. 국내 학술지 논문은 <strong>KCI를 전거</strong>로 대조하고 <strong>RISS로 교차 확인</strong>해 두 DB의 서지가 일치하는지, 학술지 등재 여부(KCI등재·등재후보)와 ISSN까지 표시합니다. 어디에서도 찾지 못한 문헌은 <strong>미확인</strong>으로 두고 RISS 검색 링크를 붙입니다 — 허위라는 뜻이 아니라 직접 확인이 필요하다는 뜻입니다.</p>
       </div>
       <div class="card">
         <h3>철회 논문 경고</h3>
@@ -269,7 +270,7 @@
       </div>
       <div class="card">
         <h3>서지 자동 교정</h3>
-        <p>공식 서지와 다른 발행연도·권·호·면수, 단행본 출판사를 찾아 고칠 내용을 제안하거나 바로 반영합니다.</p>
+        <p>공식 서지와 다른 발행연도·권·호·면수, 단행본 출판사를 찾아 고칠 내용을 제안하거나 바로 반영합니다. 학위논문은 RISS 서지로 <strong>수여기관·학위명</strong>도 제안합니다.</p>
       </div>
       <div class="card">
         <h3>본문 ↔ 목록 대조</h3>
@@ -277,17 +278,17 @@
       </div>
       <div class="card">
         <h3>영문화 목록</h3>
-        <p>국문 참고문헌의 영문 병기 목록을 만듭니다. 저자가 KCI에 등록한 <strong>공식 영문 제목·성명</strong>을 그대로 씁니다.</p>
+        <p>국문 참고문헌의 영문 병기 목록을 만듭니다. 제목은 저자가 KCI에 등록한 <strong>공식 영문 제목</strong>을 그대로 쓰고, 저자 영문 표기는 발행본 표기를 전거로 삼아 <strong>권장 표기와 표기 이력</strong>을 안내합니다(자동 교체 없음).</p>
       </div>
     </div>
     <div style="margin-top:4mm">
-      <div style="font-size:8.8pt;letter-spacing:.1em;color:var(--navy);font-weight:700;margin-bottom:1.8mm">대조하는 정보원 열 곳 + RISS 확인 링크
-        <span style="font-weight:400;letter-spacing:0;color:var(--ink2)">— 모두 연결되어 있습니다 (<span style="color:var(--navy-deep);font-weight:600">남색 = 국내</span> · <span style="color:#0d5f52;font-weight:600">청록 = 해외</span>)</span></div>
+      <div style="font-size:8.8pt;letter-spacing:.1em;color:var(--navy);font-weight:700;margin-bottom:1.8mm">대조하는 정보원 열한 곳
+        <span style="font-weight:400;letter-spacing:0;color:var(--ink2)">— 모두 자동 대조에 연결되어 있습니다 (<span style="color:var(--navy-deep);font-weight:600">남색 = 국내</span> · <span style="color:#0d5f52;font-weight:600">청록 = 해외</span>)</span></div>
       <div class="chips">
         <span class="chip kr">KCI</span>
+        <span class="chip kr">RISS</span>
         <span class="chip kr">국립중앙도서관</span>
         <span class="chip kr">국회도서관</span>
-        <span class="chip kr">RISS(확인 링크)</span>
         <span class="chip">Crossref</span>
         <span class="chip">OpenAlex</span>
         <span class="chip">Semantic Scholar</span>
@@ -296,6 +297,23 @@
         <span class="chip">DOAJ</span>
         <span class="chip">URL 접속 확인</span>
       </div>
+    </div>
+    <div style="margin-top:4mm">
+      <h3>검증은 이렇게 진행됩니다</h3>
+      <ol class="steps two">
+        <li>
+          <p><strong>DOI가 있으면 DOI부터</strong> — Crossref·DataCite·OpenAlex에서 DOI를 확인하고 철회·정정·우려표명 여부도 함께 검사합니다.</p>
+        </li>
+        <li>
+          <p><strong>국내 문헌</strong> — 학술지 논문은 KCI로 대조한 뒤 RISS로 교차 확인하고, KCI에 없으면 RISS→Crossref로 봅니다. 학위논문은 RISS→국회도서관, 단행본·보고서는 국립중앙도서관→국회도서관→RISS 순이라 ISBN 없는 기관 발간물도 확인됩니다.</p>
+        </li>
+        <li>
+          <p><strong>해외 문헌</strong> — Crossref→OpenAlex→Semantic Scholar→ERIC 순으로 찾습니다. 국내 논문의 영문 인용은 KCI·RISS에 병기된 영문 제목으로, 해외 학위논문은 RISS로 확인합니다.</p>
+        </li>
+        <li>
+          <p><strong>그래도 못 찾으면</strong> — <strong>미확인</strong>으로 표시하고 RISS 검색 링크를 붙입니다. 어느 DB에도 없는 해외 문헌은 <strong>실존 의심</strong>으로 따로 경고해 생성형 AI가 지어낸 인용을 걸러냅니다.</p>
+        </li>
+      </ol>
     </div>
   </section>
 
@@ -358,7 +376,7 @@
 
   <footer>
     <span>참고문헌 검증 서비스 도입 안내</span>
-    <span>1 / 2</span>
+    <span>2026. 9. 개정 &nbsp;·&nbsp; 1 / 2</span>
   </footer>
 </div>
 
@@ -425,6 +443,7 @@
         보관이 끝난 자료는 (부)편집위원장이 언제든 삭제할 수 있습니다.
       </p>
       <p style="margin-top:2mm">
+        실존 검증을 위해 인용 문헌의 <strong>서지사항(제목·저자·발행연도와 DOI·ISBN 등 식별자)</strong>만 KCI·RISS·Crossref 등 외부 서지 DB에 조회 질의로 전송되며, <strong>원고 본문과 투고자·이용자 정보는 외부 DB로 전송되지 않습니다</strong>.
         수집 항목, AI·외부 검증 DB로 전송되는 데이터의 정확한 범위, 보관·파기 정책은
         <a href="/guide/privacy"><strong>개인정보·원고 처리방침</strong></a>(refcheck.kr/guide/privacy)에 상세히 공개되어 있습니다.
       </p>
@@ -462,7 +481,7 @@
 
   <footer>
     <span>참고문헌 검증 서비스 도입 안내 &nbsp;·&nbsp; refcheck.kr</span>
-    <span>2 / 2</span>
+    <span>2026. 9. 개정 &nbsp;·&nbsp; 2 / 2</span>
   </footer>
 </div>
 

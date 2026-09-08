@@ -80,7 +80,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.07-09"
+APP_VERSION = "2026.09.08-01"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -423,6 +423,20 @@ _SUGGEST_FIELDS = [("year", "연도"), ("volume", "권"), ("issue", "호"), ("pa
 # 출판사는 단행본·보고서에서만 제안한다. 학술지 논문의 발행처는 수록지와 별개 개념이라
 # 참고문헌에 적지 않으므로, 유형을 가리지 않고 제안하면 없는 항목을 넣으라고 하게 된다.
 _BOOK_SUGGEST_FIELDS = [("publisher", "출판사")]
+# 학위논문은 수여기관·학위명이 필수 요소다(문편협 기준 — 학교명 없는 학위논문 표기가 잦은 오류).
+# RISS 학위논문 레코드가 두 값을 주므로(2026-09) 빠졌거나 학교가 다를 때만 제안한다.
+_THESIS_SUGGEST_FIELDS = [("institution", "수여기관"), ("degree", "학위명")]
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+def _degree_kind(s: str) -> str:
+    """학위명의 종류만 — '석사학위논문'·'Master's thesis'·'석사' → 'master'."""
+    s = (s or "").lower()
+    if "박사" in s or "doctor" in s or "ph.d" in s or "phd" in s:
+        return "doctor"
+    if "석사" in s or "master" in s:
+        return "master"
+    return s.strip()
 
 # 같은 출판사인데 표기만 다른 경우 — '(주)조은글터'와 '조은글터', '도서출판 한울'과 '한울'.
 # 이 차이로 교정을 제안하면 맞게 쓴 서지를 고치라고 하게 된다.
@@ -492,6 +506,8 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
     fields = list(_SUGGEST_FIELDS)
     if entry.get("type") in ("book", "report"):
         fields += _BOOK_SUGGEST_FIELDS
+    if entry.get("type") == "thesis":
+        fields += _THESIS_SUGGEST_FIELDS
     out = []
     for f, label in fields:
         cur = (entry.get(f) or "").strip()
@@ -502,6 +518,15 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
                 continue
         if not new or new == cur:
             continue
+        if f == "institution" and cur and (
+                _norm_publisher(cur) in _norm_publisher(new)
+                or bool(_HANGUL_RE.search(cur)) != bool(_HANGUL_RE.search(new))):
+            # '중앙대학교'로 적은 원고에 RISS 등록 '중앙대학교 교육대학원'을 강요하지 않는다 —
+            # 대학원 명 생략은 표기 관행이고, 학교가 아예 다를 때만 제안한다. 영문 인용의
+            # 'Chung-Ang University'를 국문 등록명으로 바꾸라고도 하지 않는다(표기 언어가 다름)
+            continue
+        if f == "degree" and cur and _degree_kind(cur) == _degree_kind(new):
+            continue  # '석사학위논문'과 'Master's thesis'처럼 표기 언어만 다른 경우
         if f == "pages" and cur and _norm_for_compare(cur) == _norm_for_compare(new):
             continue
         if f == "pages" and not cur:
@@ -797,9 +822,9 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     if options.get("verify"):
         # 가장 오래 걸리는 구간 — 몇 건째 조회 중인지 실시간으로 알린다
         def _verify_progress(done: int, total: int):
-            progress(f"실존·윤리 검증 (Crossref·OpenAlex·국내DB, {done}/{total}건 조회)", filename)
+            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 11개 정보원, {done}/{total}건 조회)", filename)
 
-        progress(f"실존·윤리 검증 (Crossref·OpenAlex·국내DB, {len(entries)}건)", filename)
+        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 11개 정보원, {len(entries)}건)", filename)
         verify_results = verify_mod.verify_entries(entries, progress_cb=_verify_progress)
         for i, (e, v) in enumerate(zip(entries, verify_results)):
             if v.get("status") != "verified":
@@ -1991,16 +2016,18 @@ def get_sources():
     return {
         "domestic": [
             {"name": "KCI (한국학술지인용색인)",
-             "role": "국내 학술지 논문 실존·서지 대조, 학술지 등재 여부, 발행본 참고문헌 조회",
+             "role": "국내 학술지 논문 실존·서지 대조(서지 전거), 학술지 등재 구분, 발행본 참고문헌 조회",
              "state": "on" if kr.get("kci") else "off"},
-            {"name": "국립중앙도서관 서지정보(SEOJI)", "role": "국내 단행본 ISBN·서지 대조",
+            {"name": "RISS (학술연구정보서비스, KERIS)",
+             "role": "국내 학술지 논문 교차 확인(KCI와 서지 일치 여부)·KCI 미등재지 폴백, "
+                     "국내·해외 학위논문 1순위 대조(수여기관·학위 구분), ISBN 없는 단행본·연구보고서 폴백, "
+                     "학술지 등재정보(KCI등재·후보·SCOPUS)·ISSN 확인 — 그래도 미확인인 항목엔 검색 링크",
+             # 키가 없어도 검색 링크는 동작한다 — 'off'(해당 유형 대조 생략)와 구분한다
+             "state": "on" if kr.get("riss") else "link"},
+            {"name": "국립중앙도서관 서지정보(SEOJI)", "role": "국내 단행본 ISBN·서지 대조(1순위)",
              "state": "on" if kr.get("nlk") else "off"},
-            {"name": "국회도서관 국가학술정보", "role": "학위논문 등 국내 자료 대조",
+            {"name": "국회도서관 국가학술정보", "role": "학위논문·단행본 폴백 대조",
              "state": "on" if kr.get("nanet") else "off"},
-            {"name": "RISS (학술연구정보서비스)",
-             "role": "미확인·의심 항목의 원클릭 확인 링크 — 학위논문·KCI 미등재지·해외 학위논문까지 수록"
-                     "(검색 API 제휴 추진 중, 승인 시 자동 대조로 승격)",
-             "state": "on"},
         ],
         "overseas": [
             {"name": "Crossref", "role": "DOI 조회·서지 대조, 철회(Retraction)·정정 정보", "state": "on"},
@@ -2012,10 +2039,13 @@ def get_sources():
             {"name": "DOAJ", "role": "오픈액세스 학술지 등재 여부(학술지 신뢰성)", "state": "on"},
             {"name": "URL 접속 확인", "role": "웹 자원 링크 유효성 점검", "state": "on"},
         ],
-        "note": ("국내 문헌은 KCI·국립중앙도서관·국회도서관에서, 해외 문헌은 Crossref를 시작으로 "
-                 "OpenAlex·Semantic Scholar·ERIC 순서로 대조합니다. 국내 논문의 영문 인용은 "
-                 "KCI 공식 영문 서지로도 대조하며, 국내 문헌이라도 DOI가 있으면 해외 정보원에서 "
-                 "함께 확인합니다. 확인되지 않은 항목에는 RISS 바로 확인 링크가 붙습니다."),
+        "note": ("국내 학술지 논문은 KCI를 전거로 대조한 뒤 RISS로 한 번 더 교차 확인합니다"
+                 "(KCI 미등재지는 RISS → Crossref 순). 학위논문은 RISS(국내·해외) → 국회도서관, "
+                 "단행본·보고서는 국립중앙도서관 → 국회도서관 → RISS 순으로 대조합니다. "
+                 "해외 문헌은 Crossref를 시작으로 OpenAlex·Semantic Scholar·ERIC 순서로 대조하고, "
+                 "국내 논문의 영문 인용은 KCI·RISS의 공식 영문 제목으로도 대조하며, 국내 문헌이라도 "
+                 "DOI가 있으면 해외 정보원에서 함께 확인합니다. 그래도 확인되지 않은 항목에는 "
+                 "RISS 검색 링크가 붙습니다."),
     }
 
 

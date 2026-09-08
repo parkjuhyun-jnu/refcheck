@@ -4,17 +4,21 @@
 검증 소스(전부 무료 API):
 - Crossref: DOI 조회·서지 검색 + 철회/정정/우려표명(updated-by) + 프리프린트 관계
 - OpenAlex, DataCite, Semantic Scholar: Crossref 실패 시 폴백 체인
-- DOAJ / OpenAlex source / KCI: 학술지 신뢰성(등재 여부) 확인
-- KCI·국립중앙도서관·국회도서관(verify_kr): 국내 문헌 검증(키 설정 시)
+- DOAJ / OpenAlex source / KCI / RISS: 학술지 신뢰성(등재 여부) 확인
+- KCI·RISS·국립중앙도서관·국회도서관(verify_kr): 국내 문헌 검증(키 설정 시)
+  · 학술지 논문: KCI → (적중 시 RISS 교차 확인) / 미적중 시 RISS → Crossref 폴백
+  · 학위논문: RISS(국내·해외) → 국회도서관 폴백
+  · 단행본·보고서: 국립중앙도서관 → 국회도서관 → RISS 폴백
 - URL 생존 확인
 
 결과 dict:
-{status, detail, found_doi, source, retraction, journal, preprint, meta}
+{status, detail, found_doi, source, retraction, journal, preprint, meta, xref}
 - status: verified|mismatch|not_found|suspect|link_ok|link_dead|skipped
 - retraction: {type, label, date} | None
 - journal: {flag: ok|warn|unknown, detail} | None
 - preprint: {published_doi, detail} | None
 - meta: 매칭된 문헌의 정규 서지(교정 제안용) | None
+- xref: {source, state: agree|differ, url, diff: [str]} | None — 제2 정보원 교차 확인 결과
 """
 import difflib
 import html
@@ -96,7 +100,8 @@ def _best_sim(entry_title: str, m: dict) -> float:
 
 def _base_result() -> dict:
     return {"status": "skipped", "detail": "", "found_doi": "", "source": "",
-            "retraction": None, "journal": None, "preprint": None, "meta": None}
+            "retraction": None, "journal": None, "preprint": None, "meta": None,
+            "xref": None}
 
 
 # ================================================================ 소스별 클라이언트
@@ -364,6 +369,10 @@ def _meta_from_kr(m: dict) -> dict:
         "authors": m.get("authors") or [],
         # KCI 논문 상세 페이지 링크용 Control Number — 화면이 '근거 레코드' 링크를 만든다
         "kci_id": m.get("kci_id", ""),
+        # RISS 레코드 링크(link?id=…)·학위논문 수여기관·학위명 — RISS 적중에만 값이 있다.
+        # 없으면 빈 값이라 KCI·SEOJI·NANET 적중의 화면·교정 제안은 달라지지 않는다.
+        "url": m.get("url", ""),
+        "institution": m.get("institution", ""), "degree": m.get("degree", ""),
         "source": m.get("source", ""),
     }
 
@@ -422,14 +431,28 @@ def _journal_reliability(client: httpx.Client, entry: dict,
     if entry.get("lang") == "ko":
         # KCI가 논문 상세로 알려준 등재 구분이 있으면 그대로 쓴다(학술지명 유사도 추정보다 정확)
         if kci_registration:
-            flag = "ok" if "등재" in kci_registration else "warn"
+            flag = "ok" if "등재" in kci_registration and "후보" not in kci_registration else "warn"
             return {"flag": flag, "detail": f"KCI {kci_registration} 학술지"}
         st = verify_kr.kci_journal_status(client, jname)
         if st == "listed":
             return {"flag": "ok", "detail": "KCI 조회 확인 학술지"}
         if st == "unlisted":
             return {"flag": "warn", "detail": "KCI에서 학술지명 미확인 — 등재 여부 확인 권장"}
-        return None  # KCI 키 없음/조회 불가
+        # KCI journalSearch는 미승인이라 대개 여기까지 온다 — RISS 학술지 레코드의
+        # 등재정보(KCI등재·우수등재·후보·SCOPUS)·ISSN으로 대신 확인한다
+        rs = verify_kr.riss_journal_status(client, jname)
+        if rs:
+            reg = verify_kr.riss_reg_label(rs.get("reg", ""))
+            issn = f" · ISSN {rs['issn']}" if rs.get("issn") else ""
+            if reg and "등재" in reg and "후보" not in reg:
+                return {"flag": "ok", "detail": f"KCI {reg} 학술지(RISS 확인){issn}"}
+            if reg:
+                return {"flag": "warn", "detail": f"KCI {reg} 학술지(RISS 확인){issn} — 등재 여부 확인 권장"}
+            return {"flag": "warn",
+                    "detail": f"RISS 수록 학술지이나 KCI 등재정보 없음{issn} — 등재 여부 확인 권장"}
+        if rs == {}:
+            return {"flag": "warn", "detail": "RISS에서 학술지명 미확인 — 학술지명·등재 여부 확인 권장"}
+        return None  # KCI·RISS 키 없음/조회 불가
 
     key = jname.lower()
     with _CACHE_LOCK:
@@ -605,6 +628,46 @@ def _kci_fill_detail(client: httpx.Client, kci: dict) -> tuple[str, bool]:
     return reg, err
 
 
+def _riss_reg_for(kr: dict) -> str:
+    """RISS 적중 레코드의 등재정보('KCI등재,SCOPUS') → KCI 등재구분 표기('등재(SCOPUS)')."""
+    if kr.get("source") == "RISS":
+        return verify_kr.riss_reg_label(kr.get("reg", ""))
+    return ""
+
+
+def _num_key(v: str) -> str:
+    """연도·권·호 비교키 — 숫자가 있으면 숫자만('제28권'과 '28'은 같다), 없으면 구두점 제거."""
+    digits = re.sub(r"\D", "", v or "")
+    return digits or re.sub(r"[\s\.\-–—()]+", "", (v or "").lower())
+
+
+def _riss_crosscheck(client: httpx.Client, entry: dict, kr: dict) -> dict | None:
+    """KCI 적중 항목을 RISS로 한 번 더 대조 — 두 정보원의 서지 일치 여부(xref).
+
+    RISS(KERIS)는 KCI와 별도로 구축된 서지라, 두 곳이 같으면 판정의 근거가 둘이 되고
+    다르면 어느 한쪽의 등록 오류이므로 이용자가 원문을 보게 안내한다. 국내 논문의
+    서지 전거는 KCI이므로(사용자 확정, 2026-09-07) 상이해도 status·meta는 바꾸지 않는다.
+    RISS 장애·미수록은 KCI 판정을 건드리지 않는다(best-effort — 확인이 안 되면 None).
+    검색어는 원고가 아니라 KCI 등록 제목·저자·연도로 넣는다 — 같은 문헌을 찾는 것이
+    목적이라 원고 오기의 영향을 받지 않게 한다.
+    반환: {"source": "RISS", "state": "agree"|"differ", "url": 레코드 링크, "diff": [str]} | None
+    """
+    if not verify_kr.riss_enabled():
+        return None
+    rs, _ = _safe(verify_kr.riss_search, client, kr.get("title") or entry.get("title", ""),
+                  (kr.get("authors") or entry.get("authors") or [""])[0],
+                  kr.get("year") or entry.get("year", ""), "A")
+    if not rs or rs.get("author_mismatch"):
+        return None  # 저자가 다른 레코드는 같은 문헌이 아니다 — 일치·상이 어느 쪽도 말하지 않는다
+    diff = []
+    for f, label in (("year", "연도"), ("volume", "권"), ("issue", "호")):
+        a, b = (kr.get(f) or "").strip(), (rs.get(f) or "").strip()
+        if a and b and _num_key(a) != _num_key(b):
+            diff.append(f"{label} KCI {a}/RISS {b}")
+    return {"source": "RISS", "state": "differ" if diff else "agree",
+            "url": rs.get("url", ""), "diff": diff}
+
+
 def _kci_doi_crosscheck(client: httpx.Client, entry: dict, doi: str):
     """해외 DB가 영문 제목만 수록한 국내 논문 방어 — (KCI 레코드|None, 일시오류).
 
@@ -736,43 +799,85 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                           detail="DOI를 Crossref·DataCite·OpenAlex에서 찾을 수 없음 — DOI 오기 가능성, 확인 필요")
         return result
 
-    # ---- 2) 국내 문헌: KCI(논문) / 국회도서관(학위논문) / 국립중앙도서관(단행본)
+    # ---- 2) 국내 문헌: KCI(논문, 적중 시 RISS 교차 확인) / RISS(학위논문) / 국립중앙도서관(단행본)
+    #         못 찾으면 유형별로 RISS · 국회도서관 · Crossref 순으로 폴백
     if lang == "ko" and etype in ("journal", "thesis", "book", "report"):
         kr = None
+        xref = None
         title = entry.get("title", "")
         authors = entry.get("authors") or []
+        first_author = authors[0] if authors else ""
+        year = entry.get("year", "")
         # 국내 DB도 해외와 같은 규약 — 일시 오류는 '미발견'이 아니라 '확인 못 함'으로 모은다
         if etype == "journal":
-            kr, e_k = _safe(verify_kr.kci_article_search, client, title,
-                            authors[0] if authors else "")
+            kr, e_k = _safe(verify_kr.kci_article_search, client, title, first_author)
             lookup_err |= e_k
+            if kr:
+                # 국내 논문의 전거는 KCI. RISS는 독립된 제2 정보원으로 같은 문헌을 한 번 더
+                # 확인해 두 서지의 일치 여부를 부기한다(장애 시 KCI 판정에 영향 없음)
+                xref = _riss_crosscheck(client, entry, kr)
+            else:
+                # KCI 미등재지·등록 누락 논문 — RISS 국내학술논문(A)으로 한 번 더 본다
+                kr, e_r = _safe(verify_kr.riss_search, client, title, first_author, year, "A")
+                lookup_err |= e_r
         elif etype == "thesis":
-            kr, e_k = _safe(verify_kr.nanet_search, client, title, entry.get("year", ""))
-            lookup_err |= e_k
+            # RISS(KERIS 학위논문 종합목록)가 수록이 가장 넓고 수여기관·학위 구분까지 준다
+            # — 국회도서관은 RISS에 없을 때만 본다
+            kr, e_r = _safe(verify_kr.riss_search, client, title, first_author, year, "T")
+            lookup_err |= e_r
+            if not kr:
+                kr, e_k = _safe(verify_kr.nanet_search, client, title, year)
+                lookup_err |= e_k
         elif etype in ("book", "report"):
-            kr, e_k = _safe(verify_kr.nlk_book_search, client, title,
-                            authors[0] if authors else "", entry.get("year", ""))
+            kr, e_k = _safe(verify_kr.nlk_book_search, client, title, first_author, year)
             lookup_err |= e_k
             if not kr:
-                kr, e_k2 = _safe(verify_kr.nanet_search, client, title,
-                                 entry.get("year", ""))
+                kr, e_k2 = _safe(verify_kr.nanet_search, client, title, year)
                 lookup_err |= e_k2
+            if not kr:
+                # ISBN 없는 기관 발간물·연구보고서는 SEOJI에 없다 — RISS 단행본(U)·연구보고서(F)
+                kr, e_r = _safe(verify_kr.riss_search, client, title, first_author, year,
+                                verify_kr.RISS_TYPE[etype])
+                lookup_err |= e_r
+        if kr and kr.get("author_mismatch"):
+            # 제목은 같은데 저자가 다른 RISS 레코드 — 동명 서명·동명 학위논문을 다른 사람의
+            # 문헌으로 '확인'하고 그 서지로 교정까지 제안하게 두지 않는다
+            who = ", ".join(kr.get("authors") or [])[:60]
+            result.update(status="mismatch", source=kr.get("source", "RISS"),
+                          detail=f"{kr.get('source')}에 같은 제목의 문헌이 있으나 저자가 다름"
+                                 f"(원고 {first_author} / {kr.get('source')} {who}) — 확인 필요",
+                          meta=None)
+            return result
         if kr:
             # KCI 검색 결과에는 DOI·페이지·등재구분이 빠져 있어 상세 조회로 보강한다
             reg, e_d = _kci_fill_detail(client, kr)
             lookup_err |= e_d
             detail = f"{kr.get('source')} 대조 성공(제목 일치 {kr.get('sim', 0):.0%})"
             detail += _kci_author_note(entry, kr)
+            if kr.get("mtype"):
+                detail += f" · {kr['mtype']}"  # RISS 자료유형 — 국내석사·해외박사(DDOD)·단행본 등
             if kr.get("isbn"):
                 # 같은 서명의 다른 판과 헷갈릴 때 이용자가 손으로 확인할 수 있는 유일한 값
                 detail += f" · ISBN {kr['isbn']}"
+            if xref:
+                detail += (" · RISS 교차 확인 일치" if xref["state"] == "agree" else
+                           " · RISS 교차 확인: 서지 상이(" + ", ".join(xref["diff"])
+                           + ") — 원문에서 확인 권장")
             result.update(status="verified", source=kr.get("source", "국내DB"),
-                          detail=detail, meta=_meta_kr_for_entry(entry, kr))
+                          detail=detail, meta=_meta_kr_for_entry(entry, kr), xref=xref)
             if kr.get("doi"):
                 result["found_doi"] = kr["doi"]
                 _enrich_from_crossref(client, result, kr["doi"])  # 철회 여부 보강
             if etype == "journal":
-                result["journal"] = _journal_reliability(client, entry, reg)
+                if kr.get("source") == "RISS":
+                    # RISS 적중 — 등재정보는 RISS 학술지 레코드(등재구분·ISSN)로 확인하고,
+                    # 그마저 안 되면 논문 레코드의 등재정보를 'RISS 확인'으로 표기한다
+                    result["journal"] = _journal_reliability(client, entry)
+                    if not result["journal"] and (reg := _riss_reg_for(kr)):
+                        result["journal"] = {"flag": "ok" if "등재" in reg and "후보" not in reg else "warn",
+                                             "detail": f"KCI {reg} 학술지(RISS 확인)"}
+                else:
+                    result["journal"] = _journal_reliability(client, entry, reg)
             return result
         # 국내 학술지 논문은 Crossref에도 상당수 등재 — 이어서 시도
         if etype == "journal":
@@ -790,18 +895,33 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 result["journal"] = _journal_reliability(client, entry)
                 return result
         st = verify_kr.kr_api_status()
-        used = {"journal": st["kci"], "thesis": st["nanet"], "book": st["nlk"] or st["nanet"],
-                "report": st["nlk"] or st["nanet"]}.get(etype, False)
+        # 실제로 대조한 정보원만 문구에 적는다 — 키가 없는 DB를 '찾아봤다'고 하지 않는다
+        tried = {"journal": [("KCI", st["kci"]), ("RISS", st["riss"])],
+                 "thesis": [("RISS", st["riss"]), ("국회도서관", st["nanet"])],
+                 "book": [("국립중앙도서관", st["nlk"]), ("국회도서관", st["nanet"]), ("RISS", st["riss"])],
+                 "report": [("국립중앙도서관", st["nlk"]), ("국회도서관", st["nanet"]), ("RISS", st["riss"])],
+                 }.get(etype, [])
+        used = [name for name, on in tried if on]
         if used and lookup_err:
             # 조회 자체가 실패한 경우 — '없는 문헌'으로 오해하게 두지 않는다
             _mark_lookup_failed(result)
         elif used:
-            detail = "국내 DB·Crossref에서 일치 문헌을 찾지 못함 — 서지사항 확인 필요"
+            dbs = "·".join(used) + ("·Crossref" if etype == "journal" else "")
+            detail = f"{dbs}에서 일치 문헌을 찾지 못함 — 서지사항 확인 필요"
             if etype in ("book", "report"):
                 # 국립중앙도서관 서지정보는 ISBN이 붙은 도서만 담고 있어, 비매품
-                # 기관 발간물·정부간행물은 실제로 존재해도 걸리지 않는다. 이를 알려
-                # 주지 않으면 '없는 문헌'으로 오해해 멀쩡한 참고문헌을 지우게 된다.
-                detail += " (ISBN 없는 비매품·기관 발간물은 국내 DB에 수록되지 않아, 실제로 존재해도 여기서는 확인되지 않습니다)"
+                # 기관 발간물·정부간행물은 실제로 존재해도 걸리지 않는다. RISS 단행본
+                # 종합목록이 일부를 보완하지만 수록에 구멍이 있다. 이를 알려 주지 않으면
+                # '없는 문헌'으로 오해해 멀쩡한 참고문헌을 지우게 된다.
+                if st["nlk"] and st["riss"]:
+                    detail += (" (ISBN 없는 비매품·기관 발간물은 국립중앙도서관 서지에 없고 RISS 수록도"
+                               " 일부라, 실제로 존재해도 여기서는 확인되지 않을 수 있습니다)")
+                elif st["riss"]:
+                    detail += (" (RISS 단행본 종합목록은 수록에 구멍이 있어, 실제로 존재해도"
+                               " 여기서는 확인되지 않을 수 있습니다)")
+                else:
+                    detail += (" (ISBN 없는 비매품·기관 발간물은 국내 DB에 수록되지 않아, 실제로 존재해도"
+                               " 여기서는 확인되지 않습니다)")
             result.update(status="not_found", detail=detail)
         else:
             result.update(status="skipped",
@@ -881,18 +1001,72 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 result["found_doi"] = kci["doi"]
                 _enrich_from_crossref(client, result, kci["doi"])  # 철회 여부 보강
             if reg:
-                result["journal"] = {"flag": "ok" if "등재" in reg else "warn",
+                result["journal"] = {"flag": "ok" if "등재" in reg and "후보" not in reg else "warn",
                                      "detail": f"KCI {reg} 학술지"}
+            return result
+        # KCI 미등재 국내 학술지의 영문 인용은 RISS 레코드에 병기된 영문 제목으로 잡힌다
+        # (2026-09 실측: '(Disaster Prevention Education …)' 병기 제목이 영문 검색에 적중)
+        riss_used = verify_kr.riss_enabled()
+        rs, e5 = _safe(verify_kr.riss_search, client, entry.get("title", ""),
+                       (entry.get("authors") or [""])[0], entry.get("year", ""), "A")
+        lookup_err |= e5
+        if rs:
+            result.update(status="verified", source="RISS",
+                          detail=f"RISS 대조 성공(제목 일치 {rs.get('sim', 0):.0%}) — "
+                                 f"국내 학술지 논문의 영문 인용",
+                          meta=_meta_kr_for_entry(entry, rs))
+            reg = _riss_reg_for(rs)
+            if reg:
+                result["journal"] = {"flag": "ok" if "등재" in reg and "후보" not in reg else "warn",
+                                     "detail": f"KCI {reg} 학술지(RISS 확인)"}
             return result
         if lookup_err:
             _mark_lookup_failed(result)  # 일시 오류를 '실존 의심'으로 오판하지 않음
         elif entry.get("lang") == "west":
-            dbs = "Crossref·OpenAlex·Semantic Scholar·ERIC" + ("·KCI" if kci_used else "")
+            dbs = ("Crossref·OpenAlex·Semantic Scholar·ERIC" + ("·KCI" if kci_used else "")
+                   + ("·RISS" if riss_used else ""))
             result.update(status="suspect",
                           detail=f"{dbs} 모두 미발견 — "
                                  "실존 의심(AI 생성 인용·서지 오류 가능성), 반드시 확인 필요")
         else:
             result.update(status="skipped", detail="다중 DB 미발견 — 원문 DB에서 확인 권장")
+        return result
+
+    # ---- 3b) 해외 학위논문: RISS 학위논문 API가 ProQuest 해외 박사논문(DDOD)까지 수록한다
+    #          (2026-09 실측) — 종전에는 '검증 대상 아님'으로 건너뛰던 유형
+    #          동양 문헌(lang=east)은 RISS 해외 학위논문 수록 대상이 아니라 종전대로 둔다
+    if etype == "thesis" and lang == "west" and verify_kr.riss_enabled():
+        rs, e_t = _safe(verify_kr.riss_search, client, entry.get("title", ""),
+                        (entry.get("authors") or [""])[0], entry.get("year", ""), "T")
+        lookup_err |= e_t
+        if rs and rs.get("author_mismatch"):
+            who = ", ".join(rs.get("authors") or [])[:60]
+            result.update(status="mismatch", source="RISS",
+                          detail=f"RISS에 같은 제목의 학위논문이 있으나 저자가 다름"
+                                 f"(원고 {(entry.get('authors') or [''])[0]} / RISS {who}) — 확인 필요")
+            return result
+        if rs:
+            result.update(status="verified", source="RISS",
+                          detail=f"RISS 대조 성공(제목 일치 {rs.get('sim', 0):.0%})"
+                                 + (f" · {rs['mtype']}" if rs.get("mtype") else ""),
+                          meta=_meta_kr_for_entry(entry, rs))
+            return result
+        if not verify_kr.riss_enabled():
+            lookup_err = True  # 조회 도중 다른 스레드가 인증 오류로 RISS를 껐다 — '미발견'이 아니다
+        # 국내 대학이 구입한 해외 박사논문만 실려 있어 미발견이 곧 허위는 아니다
+        note = ("RISS(해외 학위논문)에서 일치 문헌을 찾지 못함 — 수록 범위가 제한적이라 "
+                "실제로 존재해도 확인되지 않을 수 있습니다, 원문 확인 권장")
+        if entry.get("url"):
+            # URL이 있는 해외 학위논문은 종전처럼 링크 생존으로 판정한다(링크가 살아 있으면
+            # '문제' 항목으로 세지 않는다) — RISS 미수록은 부기만 한다
+            stt, det = _check_url(client, entry["url"])
+            result.update(status="link_ok" if stt == "ok" else "link_dead",
+                          detail=f"{det} · " + ("RISS 조회 실패(일시 오류)" if lookup_err else note))
+            return result
+        if lookup_err:
+            _mark_lookup_failed(result)
+        else:
+            result.update(status="not_found", detail=note)
         return result
 
     # ---- 4) URL만 있는 자료

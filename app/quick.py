@@ -163,6 +163,11 @@ def _links(entry: dict, v: dict) -> list[dict]:
     if meta.get("isbn") and "국립중앙" in (meta.get("source") or ""):
         out.append({"label": "국립중앙도서관",
                     "url": f"https://www.nl.go.kr/NL/contents/search.do?kwd={meta['isbn']}"})
+    # RISS 레코드 — RISS로 확인된 항목(meta.url) 또는 KCI 적중을 RISS가 교차 확인한 항목(xref.url)
+    riss_url = (meta.get("url") if (meta.get("source") or "") == "RISS" else "") \
+        or ((v.get("xref") or {}).get("url") or "")
+    if riss_url:
+        out.append({"label": "RISS 레코드", "url": riss_url})
     return out
 
 
@@ -278,11 +283,13 @@ def quick_lookup(q: str) -> dict:
                 entry.update(type="journal", lang=lang, title=val)
                 v = verify_mod.verify_entry(client, entry)
                 if lang == "ko" and v.get("status") != "verified":
-                    # 학술지에서 못 찾으면 단행본·학위논문으로 이어서 본다
-                    probe = {"authors": [], "title": val, "lang": "ko", "type": "book"}
-                    v2 = verify_mod.verify_entry(client, probe)
-                    if v2.get("status") == "verified":
-                        entry, v = probe, v2
+                    # 학술지에서 못 찾으면 단행본 → 학위논문(RISS) 순으로 이어서 본다
+                    for ptype in ("book", "thesis"):
+                        probe = {"authors": [], "title": val, "lang": "ko", "type": ptype}
+                        v2 = verify_mod.verify_entry(client, probe)
+                        if v2.get("status") == "verified":
+                            entry, v = probe, v2
+                            break
     except LookupUnavailable as ex:
         out.update(status="skipped",
                    detail=f"외부 DB 일시 오류 — 잠시 후 다시 시도해 주세요 ({ex})")
@@ -296,7 +303,7 @@ def quick_lookup(q: str) -> dict:
         entry["lang"] = "ko"
     out.update(status=v.get("status", "skipped"), source=v.get("source", ""),
                detail=v.get("detail", ""), meta=v.get("meta"),
-               retraction=v.get("retraction"), links=_links(entry, v))
+               retraction=v.get("retraction"), xref=v.get("xref"), links=_links(entry, v))
     # 제목을 아는 경우에만 형식을 만든다 — 미발견 DOI만 있는 상태로 만들면
     # '. (n.d.). https://doi.org/…' 같은 빈 서지가 나와 되레 혼란을 준다
     if entry.get("title"):

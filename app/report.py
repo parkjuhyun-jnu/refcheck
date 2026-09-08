@@ -147,9 +147,9 @@ def _certificate_page(doc: Document, result: dict):
 
     if result.get("verify_enabled"):
         p = doc.add_paragraph()
-        p.add_run("검증 정보원 — 국내: KCI(한국학술지인용색인) · 국립중앙도서관 서지정보 · "
-                  "국회도서관 국가학술정보 / 해외: Crossref · OpenAlex · Semantic Scholar · "
-                  "DataCite · DOAJ · URL 접속 확인").font.size = Pt(8.5)
+        p.add_run("검증 정보원 — 국내: KCI(한국학술지인용색인) · RISS(학술연구정보서비스) · "
+                  "국립중앙도서관 서지정보 · 국회도서관 국가학술정보 / 해외: Crossref · OpenAlex · "
+                  "Semantic Scholar · ERIC · DataCite · DOAJ · URL 접속 확인").font.size = Pt(8.5)
     note = doc.add_paragraph()
     nr = note.add_run(
         "이 확인서는 refcheck.kr(참고문헌 검증 서비스)가 위 원고의 참고문헌을 "

@@ -269,6 +269,108 @@ def check_kr_matching() -> bool:
     return ok
 
 
+# RISS(KERIS)에만 잡히는 국내 석사 학위논문 — KCI·국회도서관에는 없다(2026-09 실측).
+# 수여기관·학위 구분이 meta에 실리는지, 검색어 강조 태그가 값에 남지 않는지를 이 한 건으로 본다.
+RISS_SAMPLE = {"title": "사서교사 전문성 향상을 위한 자격연수 교육과정 개선방안에 관한 연구",
+               "author": "손장희", "year": "2022", "institution": "중앙대학교",
+               "degree": "석사학위논문"}
+# ProQuest 해외 박사(DDOD) 수록분 — 종전에는 '검증 대상 아님'이던 해외 학위논문(2026-09 실측)
+RISS_WEST_SAMPLE = {"title": "Reading motivation in upper elementary students: "
+                             "How children explain reading for pleasure",
+                    "author": "Poppe, R. L.", "year": "2005"}
+# KCI journalSearch가 미승인이라 학술지 등재정보는 RISS 학술지 레코드로 확인한다
+RISS_JOURNAL_SAMPLE = {"name": "한국일본교육학연구", "issn": "1229-8581"}
+
+
+def check_riss() -> bool:
+    """RISS 대조 점검 — 학위논문(국내·해외), KCI 적중 항목의 RISS 교차 확인, 학술지 등재정보.
+
+    바깥 서비스를 부르는 단계라 RISS가 점검할 수 없는 상태일 수 있다. 그럴 때는
+    실패로 몰지 않고 경고만 남긴다 — 우리 코드 문제와 RISS 사정을 섞으면 안 된다.
+    """
+    if not env_get("RISS_API_KEY"):
+        print("19) RISS 검증: 건너뜀 — .env에 RISS_API_KEY가 없습니다.")
+        return True
+    import httpx as _httpx
+    import verify
+    import verify_kr
+    from http_util import LookupUnavailable
+    ok = True
+    th = RISS_SAMPLE
+    try:
+        with _httpx.Client(headers={"User-Agent": "refstd-agent"}) as vc:
+            # 19-1) 학위논문 직접 검색 — 연도·수여기관·학위 구분이 실리고 HTML 태그가 없어야 한다
+            r = verify_kr.riss_search(vc, th["title"], th["author"], th["year"], "T")
+            if not r or r.get("source") != "RISS":
+                print("19) RISS 학위논문 검색 실패:", r); ok = False
+            else:
+                if r.get("year") != th["year"]:
+                    print(f"19) RISS 학위논문: 원고 {th['year']}년인데 {r.get('year')}년 자료가 잡힘"); ok = False
+                if th["institution"] not in (r.get("institution") or ""):
+                    print("19) RISS 학위논문: 수여기관이 다름", repr(r.get("institution"))); ok = False
+                if r.get("degree") != th["degree"]:
+                    print("19) RISS 학위논문: 학위 구분이 다름", repr(r.get("degree"))); ok = False
+                if "<" in (r.get("title") or "") or "<" in (r.get("publisher") or ""):
+                    # 검색어 강조용 태그가 값에 섞여 오면 교정문에 그대로 실린다
+                    print("19) RISS 학위논문: 응답에 HTML 태그가 남음", repr(r.get("title"))); ok = False
+
+            # 19-2) 국내 학위논문 검증 — RISS가 1순위 정보원이고 레코드 링크가 meta에 실린다
+            got = verify.verify_entry(vc, {"type": "thesis", "lang": "ko", "title": th["title"],
+                                           "authors": [th["author"]], "year": th["year"]})
+            url = (got.get("meta") or {}).get("url") or ""
+            if got.get("status") != "verified" or got.get("source") != "RISS":
+                print("19) 국내 학위논문 검증 실패:", got.get("status"), got.get("source"),
+                      got.get("detail")); ok = False
+            elif not url.startswith("http://www.riss.kr/link?id=T"):
+                print("19) 국내 학위논문: RISS 레코드 링크가 meta에 없음:", repr(url)); ok = False
+
+            # 19-3) 해외 학위논문 — 종전 '검증 대상 아님'이던 유형이 해외박사(DDOD)로 확인돼야 한다
+            w = RISS_WEST_SAMPLE
+            got = verify.verify_entry(vc, {"type": "thesis", "lang": "west", "title": w["title"],
+                                           "authors": [w["author"]], "year": w["year"]})
+            if got.get("status") != "verified" or got.get("source") != "RISS":
+                print("19) 해외 학위논문 검증 실패:", got.get("status"), got.get("source"),
+                      got.get("detail")); ok = False
+            elif "해외박사" not in (got.get("detail") or ""):
+                print("19) 해외 학위논문: detail에 '해외박사' 표기가 없음:", got.get("detail")); ok = False
+
+            # 19-4) KCI 적중 논문의 RISS 교차 확인 — 전거는 KCI, xref에 일치 여부·레코드 링크가 붙는다
+            if env_get("KCI_API_KEY"):
+                got = verify.verify_entry(vc, {
+                    "type": "journal", "lang": "ko", "title": KCI_SAMPLE["title"],
+                    "authors": [KCI_SAMPLE["author"]], "year": KCI_SAMPLE["year"],
+                    "container": KCI_SAMPLE["container"]})
+                xref = got.get("xref")
+                if got.get("status") != "verified" or got.get("source") != "KCI":
+                    print("19) KCI 교차 확인: KCI 검증 자체가 실패:", got.get("status"),
+                          got.get("source"), got.get("detail")); ok = False
+                elif not isinstance(xref, dict) or xref.get("state") != "agree":
+                    print("19) KCI 교차 확인: xref가 '일치'가 아님:", xref); ok = False
+                elif not str(xref.get("url") or "").startswith("http://www.riss.kr/link?id=A"):
+                    print("19) KCI 교차 확인: RISS 레코드 링크 이상:", repr(xref.get("url"))); ok = False
+            else:
+                print("19) KCI 교차 확인: 건너뜀 — .env에 KCI_API_KEY가 없습니다.")
+
+            # 19-5) 없는 논문은 None — 유사도 낮은 레코드를 억지로 잡으면 안 된다
+            fake = verify_kr.riss_search(vc, KCI_FAKE_TITLE, "", "2020", "A")
+            if fake is not None:
+                print("19) 없는 논문이 RISS에서 잡힘:", fake.get("title")); ok = False
+
+            # 19-6) 학술지 등재정보 — None은 조회 불가(부가 정보라 예외를 삼킨다), {}는 미검색
+            js = verify_kr.riss_journal_status(vc, RISS_JOURNAL_SAMPLE["name"])
+            if js is None:
+                print("19) 학술지 등재정보: 경고 — 조회 불가(RISS 학술지 레코드)")
+            elif ("KCI등재" not in (js.get("reg") or "")
+                  or js.get("issn") != RISS_JOURNAL_SAMPLE["issn"]):
+                print("19) 학술지 등재정보 이상:", js); ok = False
+    except LookupUnavailable as e:
+        print("19) RISS 검증: 경고 — 조회 불가", e)
+        return True
+    if ok:
+        print("19) RISS 검증: 학위논문(국내·해외)·KCI 교차 확인·학술지 등재정보 모두 정상")
+    return ok
+
+
 # 규정 문서에 실린 '올바른 표기' 예시를 그대로 정답으로 삼는다(f:\…\규정).
 #   · 문편협 공통기준 v7 (4개 학회 공통)
 #   · 한국도서관·정보학회 참고문헌 주요 오류 유형 v2
@@ -303,12 +405,12 @@ STANDARD_CASES = [
      {"type": "conference", "lang": "ko", "authors": ["국립중앙도서관 국가서지과"], "year": "2023",
       "title": "국가서지 2030 국제회의 발표집",
       "url": "https://www.oak.go.kr/nl-ir/handle/2020.oak/981"},
-     "국립중앙도서관 국가서지과 (2023). 국가서지 2030 국제회의 발표집. https://www.oak.go.kr/nl-ir/handle/2020.oak/981"),
+     "국립중앙도서관 국가서지과 (2023). 국가서지 2030 국제회의 발표집. 출처: https://www.oak.go.kr/nl-ir/handle/2020.oak/981"),
     ("학회 원고형식 — 단체저자는 인명처럼 뒤집지 않는다",
      {"type": "report", "lang": "west", "authors": ["IFLA Study Group on the FRBR"],
       "year": "2009", "title": "Functional Requirements for Bibliographic Records: Final Report",
       "url": "http://www.ifla.org/VII/s13/frbr"},
-     "IFLA Study Group on the FRBR (2009). Functional Requirements for Bibliographic Records: Final Report. http://www.ifla.org/VII/s13/frbr"),
+     "IFLA Study Group on the FRBR (2009). Functional Requirements for Bibliographic Records: Final Report. Available: http://www.ifla.org/VII/s13/frbr"),
     ("주요 오류 유형 5 — 국문 웹자료는 '출처:' 접두어",
      {"type": "web", "lang": "ko", "authors": ["국립중앙도서관"], "date": "2020. 10. 2.",
       "title": "국가서지", "url": "http://x.kr/a"},
@@ -316,7 +418,7 @@ STANDARD_CASES = [
     ("주요 오류 유형 5 — 영문 웹자료는 'Available:' 접두어",
      {"type": "web", "lang": "west", "authors": ["Smith, J."], "date": "2020, October 2",
       "title": "A title here", "url": "http://x.org/a"},
-     "Smith, J. (2020, October 2). A title here. Available: http://x.org/a"),
+     "Smith, J. (2020, October 2). A Title Here. Available: http://x.org/a"),
 ]
 # 단행본은 출판지·출판사가 모두 있어야 한다(공통기준 4.2 · 주요 오류 유형 체크리스트)
 STANDARD_VALIDATIONS = [
@@ -730,6 +832,11 @@ def main():
         # 국내 DB 매칭 품질 — 잘못된 교정을 이용자에게 주지 않는지
         if not check_kr_matching():
             print("\n== 국내 DB 매칭 점검 실패 ==")
+            sys.exit(1)
+
+        # RISS 대조 — 학위논문(국내·해외)·KCI 교차 확인·학술지 등재정보
+        if not check_riss():
+            print("\n== RISS 검증 점검 실패 ==")
             sys.exit(1)
 
         print("\n== 서버 스모크 테스트 전체 통과 ==")
