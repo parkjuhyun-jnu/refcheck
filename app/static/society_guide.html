@@ -15,7 +15,8 @@ body{margin:0;font-family:"Pretendard","Malgun Gothic","맑은 고딕",system-ui
 header{background:var(--accent);color:#fff;padding:26px 24px}
 header .wrap{max-width:960px;margin:0 auto}
 header h1{font-size:23px;margin:0 0 6px;line-height:1.4}
-header .sub{font-size:13.5px;opacity:.9}
+/* 부제 3줄 자리 확보 — 상단 메뉴(.gnav)가 안내 6곳에서 같은 높이에 오도록. 3줄은 부제가 가장 긴 도입 안내 기준(13.5px×1.7×3=5.1em) */
+header .sub{font-size:13.5px;opacity:.9;min-height:5.1em}
 header a{color:#fff}
 main{max-width:960px;margin:26px auto 80px;padding:0 18px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin-bottom:18px}

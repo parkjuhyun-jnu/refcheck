@@ -179,7 +179,10 @@
   .pagehead .wrap{max-width:960px; margin:0 auto}
   .pagehead h1{font-family:"Pretendard","Malgun Gothic","맑은 고딕",system-ui,sans-serif;
     font-size:23px; line-height:1.4; color:#fff; font-weight:700; margin:0 0 6px}
-  .pagehead .psub{font-size:13.5px; opacity:.9}
+  /* 부제는 3줄 자리를 차지한다 — 안내 6곳의 상단 메뉴(.gnav)가 어느 페이지에서나 같은
+     높이에 오게 해서, 탭을 눌러 옮겨 다닐 때 메뉴가 위아래로 튀지 않도록. 3줄은 부제가
+     가장 긴 이 페이지 기준(13.5px × 1.7 × 3 = 5.1em)이고, 다른 5곳도 같은 값을 쓴다. */
+  .pagehead .psub{font-size:13.5px; opacity:.9; min-height:5.1em}
   .gnav{margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; font-size:12.5px}
   .gnav a{color:#fff; text-decoration:none; padding:4px 12px; border-radius:999px;
     background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.28)}
