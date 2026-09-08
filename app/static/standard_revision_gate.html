@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>편집위원 전용 문서 — 문편협 공통기준 개정(안) | refcheck</title>
+<style>
+:root{
+  --bg:#f4f6f9; --card:#fff; --ink:#1c2733; --sub:#5b6b7c; --line:#dde4ec;
+  --accent:#1f4e79; --accent-soft:#e8f0f8; --warn:#b03a2e; --amber:#9a6700;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Pretendard","Malgun Gothic","맑은 고딕",system-ui,sans-serif;
+  background:var(--bg);color:var(--ink);font-size:15px;line-height:1.7;
+  display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:26px 30px;max-width:560px;width:100%}
+h1{font-size:20px;color:var(--accent);margin:0 0 4px}
+.lead{font-size:13.5px;color:var(--sub);margin:0 0 16px}
+.what{background:var(--accent-soft);border-radius:10px;padding:12px 15px;font-size:13.5px;margin-bottom:18px}
+.what b{color:var(--accent)}
+.what ul{margin:6px 0 0;padding-left:19px}
+.what li{margin:2px 0}
+label{display:block;font-size:13px;font-weight:700;margin-bottom:3px}
+input{width:100%;font:inherit;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:#fff}
+input:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+.field{margin-bottom:12px}
+.field .hint{font-size:12px;color:var(--sub);margin-top:3px}
+button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0;
+  border-radius:9px;padding:10px 22px;cursor:pointer}
+button:hover{background:#16385a}
+button:disabled{opacity:.6;cursor:default}
+#msg{font-size:13px;margin-top:10px;min-height:20px}
+#msg.err{color:var(--warn)}
+#msg.ok{color:var(--accent)}
+.foot{font-size:12.5px;color:var(--sub);margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+a{color:var(--accent);font-weight:700}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>🔒 편집위원 전용 문서입니다</h1>
+  <p class="lead">「문편협 공통기준 개정(안)」은 네 학회 편집위원·(부)편집위원장께 드리는 논의용 자료입니다.</p>
+
+  <div class="what">
+    <b>어떤 문서인가요</b>
+    <ul>
+      <li>공통기준에서 <b>문언이 불명확하거나 네 학회지의 해석이 갈리는 항목</b>을 모은 현황 자료입니다.</li>
+      <li>2025년 4개 학회지 발행 논문 240편·참고문헌 <b>7,911건</b> 실측이 근거입니다.</li>
+      <li>어느 쪽으로 정해야 한다는 결론은 담지 않았습니다 — <b>무엇을 정해야 하는지</b>까지만 적었습니다.</li>
+    </ul>
+  </div>
+
+  <form id="f" onsubmit="return enter(event)">
+    <div class="field">
+      <label for="code">학회 코드</label>
+      <input type="password" id="code" autocomplete="off" autofocus>
+      <div class="hint">소속 학회에서 안내받은 코드입니다.</div>
+    </div>
+    <div class="field">
+      <label for="role">역할 코드</label>
+      <input type="password" id="role" autocomplete="off">
+      <div class="hint">편집위원·편집위원장 코드를 학회 코드와 <b>함께</b> 입력하셔야 이 문서가 열립니다.</div>
+    </div>
+    <button id="btn" type="submit">입장</button>
+    <div id="msg"></div>
+  </form>
+
+  <div class="foot">
+    코드가 없으시면 소속 학회 편집위원회 또는 관리자에게 문의해 주세요.<br>
+    코드 없이 보실 수 있는 문서는 <a href="/guide/style/detail">참고문헌 작성법 상세</a>와
+    <a href="/guide">이용 안내</a>에 있습니다.
+  </div>
+</div>
+
+<script>
+function enter(ev){
+  ev.preventDefault();
+  const btn=document.getElementById('btn'), msg=document.getElementById('msg');
+  const code=document.getElementById('code').value.trim();
+  const role=document.getElementById('role').value.trim();
+  if(!code){ msg.className='err'; msg.textContent='학회 코드를 입력해 주세요.'; return false; }
+  if(!role){ msg.className='err'; msg.textContent='역할 코드까지 입력하셔야 이 문서가 열립니다 — 편집위원·편집위원장 전용입니다.'; return false; }
+  btn.disabled=true; msg.className=''; msg.textContent='확인 중…';
+  const fd=new FormData(); fd.append('code',code); fd.append('role_code',role);
+  fetch('/api/access',{method:'POST',body:fd})
+    .then(r=>r.json().then(d=>({ok:r.ok,d})))
+    .then(({ok,d})=>{
+      // 입장에 성공해도 이용자 역할이면 이 문서는 열리지 않는다 — 그 사실을 여기서 알려 준다
+      if(ok&&d.ok&&(d.role==='editor'||d.role==='chair')){
+        msg.className='ok'; msg.textContent=(d.role_label||'편집위원')+'으로 확인되었습니다. 문서를 엽니다…';
+        location.reload();
+        return;
+      }
+      btn.disabled=false;
+      msg.className='err';
+      msg.textContent=(ok&&d.ok)
+        ? '이용자 코드로 입장하셨습니다 — 이 문서는 편집위원·편집위원장만 열 수 있습니다.'
+        : (d.message||'코드를 확인해 주세요.');
+    })
+    .catch(()=>{ btn.disabled=false; msg.className='err'; msg.textContent='연결에 실패했습니다. 잠시 후 다시 시도해 주세요.'; });
+  return false;
+}
+</script>
+</body>
+</html>

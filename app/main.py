@@ -80,7 +80,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.08-04"
+APP_VERSION = "2026.09.08-05"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -1565,8 +1565,6 @@ def _job_public(job: dict) -> dict:
 # 규정 Q&A는 관리자가 공개 여부를 정한다(기본 비공개). 링크가 정적 페이지에 박혀
 # 있으므로, 비공개 상태에서는 내줄 때 <!--QA:BEGIN-->…<!--QA:END--> 구간을 걷어낸다.
 _QA_BLOCK_RE = re.compile(r"[ \t]*<!--QA:BEGIN-->.*?<!--QA:END-->\n?", re.S)
-# 편집위원 전용 문서(기준 개정안) 링크도 같은 방식으로 — 이용자에게는 링크 자체를 내주지 않는다
-_EDITOR_BLOCK_RE = re.compile(r"[ \t]*<!--EDITOR:BEGIN-->.*?<!--EDITOR:END-->\n?", re.S)
 
 
 def _qa_enabled() -> bool:
@@ -1580,8 +1578,6 @@ def _serve_html(name: str, request: Request | None = None) -> str:
     html = (APP_DIR / "static" / name).read_text(encoding="utf-8")
     if not _qa_enabled():
         html = _QA_BLOCK_RE.sub("", html)
-    if request is None or not is_editor(request):
-        html = _EDITOR_BLOCK_RE.sub("", html)
     return html
 
 
@@ -1696,32 +1692,19 @@ def guide_privacy(request: Request):
     return _serve_html("privacy.html", request)
 
 
-_EDITOR_GATE_HTML = """<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow"><title>편집위원 전용 문서 | refcheck</title>
-<style>body{margin:0;font-family:"Pretendard","Malgun Gothic",system-ui,sans-serif;background:#f4f6f9;
-color:#1c2733;line-height:1.7;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.box{background:#fff;border:1px solid #dde4ec;border-radius:14px;padding:28px 32px;max-width:520px;margin:20px}
-h1{font-size:19px;color:#1f4e79;margin:0 0 10px}p{font-size:14px;color:#5b6b7c}
-a{color:#1f4e79;font-weight:700}</style></head><body><div class="box">
-<h1>편집위원 전용 문서입니다</h1>
-<p>「문편협 공통기준 개정(안)」은 네 학회 편집위원·(부)편집위원장께 드리는 논의용 초안이라
-학회에서 받으신 <b>편집위원 코드</b>로 입장하셔야 열립니다.</p>
-<p>코드를 받으셨다면 <a href="/">서비스 첫 화면</a>에서 입장한 뒤 다시 열어 주세요.
-누구나 볼 수 있는 문서는 <a href="/guide/style/detail">참고문헌 작성법 상세</a>에 있습니다.</p>
-</div></body></html>"""
-
-
 @app.get("/guide/standard-revision", response_class=HTMLResponse)
 def standard_revision(request: Request):
     """문편협 공통기준 개정(안) — 편집위원 이상 전용.
 
     기준 문언이 불명확하거나 4개 학회지의 해석이 갈리는 항목을 실측(2025년 발행본
-    참고문헌 7,911건)과 함께 정리한 논의용 초안. 확정된 기준이 아니라 제안이므로
-    일반 이용자에게는 링크도 문서도 내주지 않는다(EDITOR 블록·이 게이트).
+    참고문헌 7,911건)과 함께 정리한 현황 자료. 확정된 기준이 아니라 논의용이므로
+    편집위원·편집위원장·관리자에게만 내준다.
+
+    링크는 누구에게나 보이되(자물쇠 표시), 코드가 없으면 문서 대신 입장 화면을 준다.
+    입장 화면에서 바로 코드를 넣을 수 있어 첫 화면으로 돌아갔다 올 필요가 없다.
     """
     if not is_editor(request):
-        return HTMLResponse(_EDITOR_GATE_HTML, status_code=403)
+        return HTMLResponse(_serve_html("standard_revision_gate.html"), status_code=403)
     return _serve_html("standard_revision.html", request)
 
 
