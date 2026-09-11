@@ -741,7 +741,7 @@ code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;font-size:1
 // main.py의 APP_VERSION과 반드시 같아야 한다. 서버에 index.html이 덜 복사됐는지
 // 알아내려고 일부러 손으로 박아 두는 값이라 자동 주입하지 않는다.
 // (test_server.py가 두 값이 어긋나면 실패시킨다)
-const UI_VERSION='2026.09.11-01';
+const UI_VERSION='2026.09.11-02';
 const $=id=>document.getElementById(id);
 let pickedFiles=[], styles=[], currentJob=null, pollTimer=null, etaTimer=null, pollFails=0, poll404=0;
 
@@ -1346,7 +1346,7 @@ function vDetailFull(v){
   if(v.preprint&&v.preprint.detail) parts.push(v.preprint.detail);
   return parts.filter(Boolean).join(' · ');
 }
-function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 // ---------- 변경 전·후 문자 단위 대비
 // 서버에 저장하면 이력 JSON이 크게 불어나므로, 화면에서만 계산해 쓴다.
@@ -1621,6 +1621,9 @@ function fileBodyHtml(job,idx,viewHid){
     let g=null;
     res.items.forEach((it,ii)=>{
       if(it.group&&it.group!==g){ g=it.group; h+=`<div class="group-label">[${esc(g)}]</div>`; }
+      // 한 항목의 표시 오류가 결과 전체를 비우지 않게 — 그 항목만 오류 표시로 대신한다
+      // (지난 결과 '결과 보기'가 '불러오는 중…'에서 멈추던 신고, 2026-09-11)
+      try{
       const v=it.verify||null;
       const lb=v? VLABEL[v.status]||null : null;
       const ret=v&&v.retraction;
@@ -1673,9 +1676,16 @@ function fileBodyHtml(job,idx,viewHid){
         h+=`<div class="issue" style="color:var(--accent)">🔤 ${esc(nt)}</div>`;
       });
       h+='</div>';  // .refitem
+      }catch(e){
+        console.error('항목 표시 오류', ii, e, it);
+        h+=`<div class="refitem"><p>${esc(it&&it.formatted)}</p><div class="issue">⚠ 이 항목의 상세 표시 중 오류: ${esc(e&&e.message)}</div></div>`;
+      }
     });
     h+='</div>';
 
+    // 아래 부가 절(대비표·검증 상세·본문 대조·건전성·영문 변환)은 하나가 실패해도
+    // 위 목록까지 잃지 않도록 묶어서 감싼다 — 실패한 자리에 오류 문구만 남긴다
+    try{
     // 대비표 — 바뀐 글자만 색으로 표시하고, 변경된 항목만 추려 볼 수 있게 한다
     const nChanged=res.items.filter(it=>it.changed).length;
     h+=`<div class="row" style="margin:16px 0 2px">
@@ -1774,6 +1784,10 @@ function fileBodyHtml(job,idx,viewHid){
       h+='<h3>국문 참고문헌 영문 변환 목록 (알파벳순)</h3><div class="reflist">';
       for(const line of res.english_list) h+=`<p>${esc(line)}</p>`;
       h+='</div>';
+    }
+    }catch(e){
+      console.error('결과 부가 절 표시 오류', e);
+      h+=`<div class="errbox">⚠ 결과의 일부(대비표·검증 상세 등)를 표시하지 못했습니다: ${esc(e&&e.message)}</div>`;
     }
   return h;
 }
@@ -2044,9 +2058,21 @@ async function delSelectedPast(){
 }
 async function openPastView(hid){
   $('pastView').innerHTML='<div class="hint">결과를 불러오는 중…</div>';
-  const r=await fetch('/api/results/'+hid);
-  if(!r.ok){ $('pastView').innerHTML='<div class="errbox">열람 권한이 없거나 결과를 찾을 수 없습니다.</div>'; return; }
-  const d=await r.json();
+  let d;
+  try{
+    const r=await fetch('/api/results/'+hid);
+    if(!r.ok){
+      const t=await r.text().catch(()=>'');
+      $('pastView').innerHTML=`<div class="errbox">${r.status===401||r.status===403?'열람 권한이 없습니다(코드를 다시 입력해 주세요).':'결과를 불러오지 못했습니다.'} (HTTP ${r.status}${t?' · '+esc(t.slice(0,160)):''})</div>`;
+      return;
+    }
+    d=await r.json();
+  }catch(e){
+    console.error('지난 결과 조회 오류', e);
+    $('pastView').innerHTML=`<div class="errbox">결과를 불러오지 못했습니다: ${esc(e&&e.message)}</div>`;
+    return;
+  }
+  if(!d||!d.result){ $('pastView').innerHTML='<div class="errbox">저장된 결과가 비어 있습니다(처리 중 저장이 끊겼을 수 있습니다).</div>'; return; }
   window._viewRes=d.result;
   // 처음 분석했을 때와 같은 화면(4. 처리 결과 카드)에 그대로 그린다 — 대화상자 안에
   // 작게 보여 주면 내려받기 버튼·대비표를 찾기 어려웠다(이용자 요청 2026-09-11).
@@ -2056,7 +2082,19 @@ async function openPastView(hid){
   window._tabsBuilt=false; window._openTab=0; window._renderedTab=-1;
   window._refFilter=window._refFilter||{}; window._refFilter[0]='';  // 이전 결과의 필터를 물려받지 않는다
   const job={id:'',mode:'view',results:[d.result],view_hid:hid};
-  renderResults(job);
+  try{
+    renderResults(job);
+  }catch(e){
+    // 저장된 결과의 어떤 값 때문에 그리기가 실패해도 이유를 화면에 남긴다
+    console.error('지난 결과 표시 오류', e, d);
+    $('resultCard').style.display='';
+    $('results').innerHTML=`<div class="errbox">⚠ 저장된 결과를 표시하지 못했습니다: ${esc(e&&e.message)}<br>`
+      +`<span class="hint">내려받기는 가능합니다 — </span>`
+      +`<a href="/api/results/${esc(hid)}/download?fmt=docx">결과 DOCX</a> · `
+      +`<a href="/api/results/${esc(hid)}/download?fmt=hwpx">한글 HWPX</a> · `
+      +`<a href="/api/results/${esc(hid)}/download?fmt=txt">TXT</a></div>`;
+    $('resultCard').scrollIntoView({behavior:'smooth'});
+  }
   $('outDirNote').textContent=`📂 지난 결과 열람 — ${d.meta.time} 처리 · ${d.meta.user||'익명'}(${d.meta.org||'-'}) · 처리 당시 저장된 결과이며 내려받기도 이 결과 기준입니다.`;
 }
 // 최종 목록 문자열 — HWPX·TXT 내보내기와 같은 규칙: 영문 변환 목록이 따로 있으면
@@ -2986,6 +3024,46 @@ async function adoptChecked(){
     await renderKb();
   } else { $('cmpMsg').textContent='등록 실패'; $('cmpMsg').className='msg bad'; }
 }
+
+// ---------- 유휴 자동 로그아웃 — 1시간 동안 아무 동작이 없으면 학회 코드·관리자 로그인을 해제
+// (사용자 지시 2026-09-11: 로그아웃을 잊어도 공용 PC에서 다음 사람이 그대로 쓰지 못하게).
+// 서버도 같은 기준(main.py IDLE_TTL)으로 세션을 끊으므로 화면은 두 가지만 한다:
+//  ① 사용 중(마우스·키보드·스크롤)일 때 5분에 한 번 /api/ping으로 서버의 유휴 시계를 되돌리고
+//  ② 무동작이 1시간을 넘기면 스스로 해제하고 알린다(백그라운드 탭에서도 1분 간격 검사는 돈다).
+const IDLE_LOGOUT_MS=60*60*1000, IDLE_PING_MS=5*60*1000;
+let _lastActive=Date.now(), _lastPing=Date.now();
+['mousemove','mousedown','keydown','scroll','touchstart','wheel'].forEach(ev=>
+  document.addEventListener(ev,()=>{ _lastActive=Date.now(); },{passive:true}));
+function isLoggedIn(){ const s=window._status||{}; return !!(s.admin||(s.access_required&&s.access_ok)); }
+async function autoLogout(reason){
+  // 서버 세션 해제 — 어느 한쪽이 실패해도 나머지는 진행
+  try{ await fetch('/api/access/logout',{method:'POST'}); }catch(e){}
+  try{ await fetch('/api/admin/logout',{method:'POST'}); }catch(e){}
+  // 수동 '나가기'와 같은 정리 — 공용 PC에 이름·소속·단건 검증 흔적을 남기지 않는다
+  ['refstd_user','refstd_org','refstd_orgetc'].forEach(k=>localStorage.removeItem(k));
+  if($('userName')) $('userName').value='';
+  if($('orgEtc')) $('orgEtc').value='';
+  const qi=$('quickQ'), qo=$('quickOut'); if(qi) qi.value=''; if(qo) qo.innerHTML='';
+  window._quickLast={};
+  const sel=$('orgSel'); if(sel){ sel.disabled=false; sel.selectedIndex=0; orgChanged(); }
+  try{ await refreshStatus(); }catch(e){}
+  alert(reason||'1시간 동안 사용하지 않아 자동으로 로그아웃되었습니다.\n계속하려면 학회 코드(관리자는 로그인)를 다시 입력해 주세요.');
+}
+setInterval(async()=>{
+  if(!isLoggedIn()) return;
+  const now=Date.now();
+  if(now-_lastActive>=IDLE_LOGOUT_MS){ await autoLogout(); return; }
+  // 마지막 ping 이후 실제 동작이 있었을 때만 보낸다 — 가만히 둔 화면이 세션을 붙들지 않게
+  if(_lastActive>_lastPing&&now-_lastPing>=IDLE_PING_MS){
+    _lastPing=now;
+    try{
+      const p=await (await fetch('/api/ping')).json();
+      // 서버 쪽에서 먼저 끊겼으면(재시작·다른 탭에서 해제·유휴 만료) 화면도 맞춘다
+      if(!p.admin&&!p.access_ok)
+        await autoLogout('서버 세션이 만료되어 로그아웃되었습니다.\n계속하려면 학회 코드(관리자는 로그인)를 다시 입력해 주세요.');
+    }catch(e){}
+  }
+},60*1000);
 
 init();
 </script>

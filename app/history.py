@@ -18,7 +18,9 @@ APP_DIR = Path(__file__).parent
 HISTORY_DIR = APP_DIR / "history"
 UPLOADS_DIR = APP_DIR / "uploads"
 ARCHIVE_PATH = APP_DIR / "history_archive.csv"  # 300건 초과로 밀려난 이력의 영구 보존(엑셀용)
-MAX_RECORDS = 300  # 초과 시 오래된 기록부터 아카이브 후 삭제
+# 학회별로 최근 100건을 보존한다(사용자 요청 2026-09-11: 지난 분석을 다시 보고 내려받을 수
+# 있어야 같은 원고를 또 올려 분석하지 않는다). 초과분은 오래된 것부터 아카이브 후 삭제.
+MAX_PER_ORG = 100
 _LOCK = threading.Lock()
 
 
@@ -159,12 +161,18 @@ def _archive_record_unlocked(rec: dict):
 
 
 def _prune_unlocked():
-    files = sorted(HISTORY_DIR.glob("h_*.json"), key=lambda p: p.stat().st_mtime)
-    for p in files[:-MAX_RECORDS]:
+    """학회(org)별로 최근 MAX_PER_ORG건만 남긴다 — 학회 값이 없는 기록은 한 묶음으로 센다."""
+    files = sorted(HISTORY_DIR.glob("h_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    seen: dict[str, int] = {}
+    for p in files:
         try:
             rec = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             rec = {}
+        org = (rec.get("org") or "") if rec else ""
+        seen[org] = seen.get(org, 0) + 1
+        if seen[org] <= MAX_PER_ORG:
+            continue
         try:
             if rec:
                 _archive_record_unlocked(rec)

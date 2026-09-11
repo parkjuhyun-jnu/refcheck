@@ -6,6 +6,7 @@
 """
 import contextlib
 import hashlib
+import hmac
 import io
 import re
 import secrets
@@ -80,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.11-01"
+APP_VERSION = "2026.09.11-02"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -99,8 +100,13 @@ GROUP_LABEL_CONV = formatter.GROUP_LABEL_CONV
 
 # ================================================================ 관리자 인증
 # 관리자 계정은 프로젝트 루트 .env의 ADMIN_ID / ADMIN_PASSWORD 로 설정한다.
-ADMIN_SESSIONS: dict[str, float] = {}
-SESSION_TTL = 12 * 3600  # 12시간
+ADMIN_SESSIONS: dict[str, dict] = {}   # 토큰 → {"last": 마지막 요청 시각, "exp": 절대 만료 시각}
+SESSION_TTL = 12 * 3600  # 12시간 — 로그인 유지 상한
+# 1시간 동안 요청이 없으면 관리자 로그인·학회 코드 입장을 모두 자동 해제한다(사용자 지시
+# 2026-09-11: "로그아웃을 안 하더라도 1시간 동안 아무 동작이 없으면 로그아웃"). 공용 PC에서
+# 로그아웃을 잊어도 다음 사람이 그대로 쓰지 못하게. 화면(index.html)은 사용 중일 때 5분마다
+# /api/ping으로 이 시계를 되돌리고, 무동작 1시간이면 스스로 해제한다.
+IDLE_TTL = 3600
 _PLACEHOLDER_PW = {"", "바꿔주세요", "changeme", "password", "1234"}
 
 
@@ -115,18 +121,87 @@ def admin_configured() -> bool:
 
 def is_admin(request: Request) -> bool:
     tok = request.cookies.get("admin_token", "")
-    exp = ADMIN_SESSIONS.get(tok)
-    if not tok or not exp:
+    sess = ADMIN_SESSIONS.get(tok) if tok else None
+    if not sess:
         return False
-    if time.time() > exp:
+    now = time.time()
+    if now > sess["exp"] or now - sess["last"] > IDLE_TTL:
         ADMIN_SESSIONS.pop(tok, None)
         return False
+    sess["last"] = now   # 요청이 있을 때마다 유휴 시계를 되돌린다
     return True
 
 
 def _cookie_secure() -> bool:
     """HTTPS 정식 운영 환경에서는 .env의 COOKIE_SECURE=1 로 쿠키를 HTTPS 전용으로 보호."""
     return aiengine.env_get("COOKIE_SECURE") == "1"
+
+
+# ---- 접근 쿠키 서명 — 학회 코드 입장 쿠키에 발급·활동 시각을 실어 유휴 1시간을 재는 근거.
+# 코드 해시만 담던 옛 쿠키는 나이를 알 수 없어(훔친 쿠키가 영구히 유효) 서명된 형식으로 바꾼다.
+_SESSION_SECRET_PATH = APP_DIR / ".session_secret"
+_session_secret_cache: bytes | None = None
+
+
+def _session_secret() -> bytes:
+    """서명 비밀 — .env SESSION_SECRET > app/.session_secret(없으면 만들어 둔다)."""
+    global _session_secret_cache
+    if _session_secret_cache:
+        return _session_secret_cache
+    val = aiengine.env_get("SESSION_SECRET").strip()
+    if not val:
+        try:
+            val = _SESSION_SECRET_PATH.read_text(encoding="utf-8").strip()
+        except OSError:
+            val = ""
+        if len(val) < 32:
+            val = secrets.token_hex(32)
+            try:
+                _SESSION_SECRET_PATH.write_text(val, encoding="utf-8")
+            except OSError:
+                pass  # 못 쓰면 프로세스 수명 동안만 유효 — 재시작하면 코드를 다시 입력하게 된다
+    _session_secret_cache = val.encode("utf-8")
+    return _session_secret_cache
+
+
+def _access_sign(payload: str) -> str:
+    return hmac.new(_session_secret(), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def _make_access_cookie(h: str, issued: int | None = None) -> str:
+    """쿠키값 'hash.발급시각.활동시각.서명' — 활동 시각은 갱신할 때마다 지금으로."""
+    now = int(time.time())
+    payload = f"{h}.{issued or now}.{now}"
+    return f"{payload}.{_access_sign(payload)}"
+
+
+def _parse_access_cookie(value: str) -> tuple[str, int, int] | None:
+    """(hash, 발급시각, 활동시각) — 서명이 다르거나 옛 형식(해시만)이면 None."""
+    parts = (value or "").split(".")
+    if len(parts) != 4:
+        return None
+    h, issued, last, sig = parts
+    if not hmac.compare_digest(sig, _access_sign(f"{h}.{issued}.{last}")):
+        return None
+    try:
+        return h, int(issued), int(last)
+    except ValueError:
+        return None
+
+
+@app.middleware("http")
+async def _refresh_access_cookie(request: Request, call_next):
+    """활동이 있으면 접근 쿠키의 활동 시각을 되돌려 다시 싣는다(_access_info가 표시해 둔다).
+
+    로그아웃 응답처럼 이미 access_token을 다루는 응답에는 덧쓰지 않는다.
+    """
+    response = await call_next(request)
+    fresh = getattr(request.state, "access_refresh", None)
+    if fresh and not any(c.startswith("access_token=")
+                         for c in response.headers.getlist("set-cookie")):
+        response.set_cookie("access_token", fresh, httponly=True, samesite="lax",
+                            max_age=IDLE_TTL, secure=_cookie_secure())
+    return response
 
 
 def _client_ip(request: Request) -> str:
@@ -292,14 +367,27 @@ def _resolve_codes(code: str, role_code: str) -> tuple[str, tuple[str, str]] | N
 
 
 def _access_info(request: Request) -> tuple[str, str]:
-    """(학회명, 역할) — 미인증이면 ('', '')."""
-    return _valid_hashes().get(request.cookies.get("access_token", ""), ("", ""))
+    """(학회명, 역할) — 미인증·유휴 1시간 경과·역할별 상한(ACCESS_TTL) 경과면 ('', '')."""
+    parsed = _parse_access_cookie(request.cookies.get("access_token", ""))
+    if not parsed:
+        return "", ""
+    h, issued, last = parsed
+    info = _valid_hashes().get(h)
+    if not info:
+        return "", ""
+    now = int(time.time())
+    if now - last > IDLE_TTL or now - issued > ACCESS_TTL.get(info[1], ACCESS_TTL["user"]):
+        return "", ""
+    # 활동 시각 갱신 — 1분에 한 번만 다시 써서 Set-Cookie 남발을 막는다(미들웨어가 응답에 싣는다)
+    if now - last >= 60:
+        request.state.access_refresh = _make_access_cookie(h, issued)
+    return info
 
 
 def has_access(request: Request) -> bool:
     if not access_required() or is_admin(request):
         return True
-    return request.cookies.get("access_token", "") in _valid_hashes()
+    return bool(_access_info(request)[1])
 
 
 def access_org(request: Request) -> str:
@@ -353,9 +441,9 @@ def enter_access(request: Request, code: str = Form(""), role_code: str = Form("
         token, (org_name, role) = found
         resp = JSONResponse({"ok": True, "org": org_name, "role": role,
                              "role_label": ROLE_LABEL.get(role, "이용자")})
-        resp.set_cookie("access_token", token, httponly=True, samesite="lax",
-                        max_age=ACCESS_TTL.get(role, ACCESS_TTL["user"]),
-                        secure=_cookie_secure())
+        # 쿠키 수명은 유휴 한도와 같다 — 활동이 있으면 미들웨어가 새로 발급해 연장된다
+        resp.set_cookie("access_token", _make_access_cookie(token), httponly=True,
+                        samesite="lax", max_age=IDLE_TTL, secure=_cookie_secure())
         return resp
     _login_failed("access", ip)
     time.sleep(0.8)  # 무차별 대입 지연
@@ -395,7 +483,7 @@ def admin_login(request: Request, admin_id: str = Form(""), password: str = Form
             and secrets.compare_digest(password.encode("utf-8"), pw.encode("utf-8")):
         _login_ok("admin", ip)
         tok = secrets.token_urlsafe(32)
-        ADMIN_SESSIONS[tok] = time.time() + SESSION_TTL
+        ADMIN_SESSIONS[tok] = {"last": time.time(), "exp": time.time() + SESSION_TTL}
         resp = JSONResponse({"ok": True})
         resp.set_cookie("admin_token", tok, httponly=True, samesite="lax",
                         max_age=SESSION_TTL, secure=_cookie_secure())
@@ -411,6 +499,15 @@ def admin_logout(request: Request):
     resp = JSONResponse({"ok": True})
     resp.delete_cookie("admin_token")
     return resp
+
+
+@app.get("/api/ping")
+def ping(request: Request):
+    """화면의 활동 신호 — 요청 자체가 관리자·접근 쿠키의 유휴 시계를 되돌린다.
+
+    서버 쪽에서 먼저 끊겼는지(재시작·다른 탭에서 해제·유휴 만료) 화면이 맞춰 보는 용도.
+    """
+    return {"admin": is_admin(request), "access_ok": has_access(request)}
 
 
 # ================================================================ 처리 파이프라인
@@ -2285,7 +2382,8 @@ def list_results(request: Request):
     rows = history_mod.list_history()
     if org is not None:
         rows = [h for h in rows if h.get("org") == org]
-    return {"org": org or "", "admin": org is None, "results": rows[:200]}
+    # 학회별 100건 보존이라 관리자 전체 목록은 그 합만큼 길어질 수 있다
+    return {"org": org or "", "admin": org is None, "results": rows[:500]}
 
 
 def _get_viewable_record(hid: str, request: Request) -> dict:
