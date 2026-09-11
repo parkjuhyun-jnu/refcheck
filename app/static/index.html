@@ -241,7 +241,7 @@ code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;font-size:1
     </div>
     <div id="srcBoxCard" style="display:none;margin-top:8px"></div>
     <div class="checks">
-      <label><input type="checkbox" id="optVerify" checked> 실존·윤리 검증 <span class="hint">(KCI·RISS·국내DB·Crossref·OpenAlex·ERIC 등 11개 정보원·철회검사·URL, 미확인 항목엔 RISS 직접 검색 링크)</span></label>
+      <label><input type="checkbox" id="optVerify" checked> 실존·윤리 검증 <span class="hint">(KCI·RISS·국내DB·법령정보센터·Crossref·OpenAlex·ERIC 등 12개 정보원·철회검사·URL, 미확인 항목엔 RISS 직접 검색 링크)</span></label>
       <label><input type="checkbox" id="optAutofix"> 서지 자동 교정 <span class="hint">(공식 서지로 연도·권·호·면수, 단행본은 출판사까지 자동 수정)</span></label>
       <label><input type="checkbox" id="optCross" checked> 본문 인용 ↔ 목록 대조</label>
       <label><input type="checkbox" id="optEng" checked> 영문 변환 목록 <span class="hint">(학회 투고 시 필수 — 국문 참고문헌에는 영문화 목록을 병기합니다. AI 모드)</span></label>
@@ -741,7 +741,7 @@ code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;font-size:1
 // main.py의 APP_VERSION과 반드시 같아야 한다. 서버에 index.html이 덜 복사됐는지
 // 알아내려고 일부러 손으로 박아 두는 값이라 자동 주입하지 않는다.
 // (test_server.py가 두 값이 어긋나면 실패시킨다)
-const UI_VERSION='2026.09.11-02';
+const UI_VERSION='2026.09.11-03';
 const $=id=>document.getElementById(id);
 let pickedFiles=[], styles=[], currentJob=null, pollTimer=null, etaTimer=null, pollFails=0, poll404=0;
 
@@ -1310,6 +1310,10 @@ function vLinks(it){
   if(m.kci_id) links.push(['KCI 레코드','https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId='+encodeURIComponent(m.kci_id)]);
   if(m.isbn&&String(m.source||'').includes('국립중앙'))
     links.push(['국립중앙도서관','https://www.nl.go.kr/NL/contents/search.do?kwd='+encodeURIComponent(m.isbn)]);
+  if(m.eric_id) links.push(['ERIC 레코드','https://eric.ed.gov/?id='+encodeURIComponent(String(m.eric_id))]);
+  // 법령 — 국가법령정보센터 현행 법령 페이지와 영어번역 검색(영문 법령명의 근거)
+  if(m.law_url) links.push(['국가법령정보센터',String(m.law_url)]);
+  if(m.law_en_url&&m.title_en) links.push(['영문 법령명(법제처)',String(m.law_en_url)]);
   // RISS 레코드 — RISS(학술연구정보서비스, KERIS)가 전거로 적중하면 meta.url, KCI 적중 항목을
   // RISS로 교차 확인했으면 xref.url 로 온다(둘이 동시에 오지는 않는다 — 하나만 넣어 중복을 막는다).
   // 구버전 저장 결과에는 두 키가 없으므로 존재 검사로만 분기한다.
@@ -1660,7 +1664,7 @@ function fileBodyHtml(job,idx,viewHid){
       if(it.suggestions&&it.suggestions.length){
         const ap=it.suggestions.some(sg=>sg.applied);
         h+=`<div class="issue" style="color:${ap?'var(--ok)':'var(--amber)'}">✏ ${ap?'자동 교정 적용':'교정 제안'}: `
-          +it.suggestions.map(sg=>`${esc(sg.label)} ${esc(sg.current)}→${esc(sg.suggested)}(${esc(sg.source)})`).join(', ')
+          +it.suggestions.map(sg=>`${esc(sg.label)}: ${esc(sg.current)} → ${esc(sg.suggested)} (${esc(sg.source)} 등록 서지 기준)`).join(' · ')
           +'</div>';
       }
       if(it.tips&&it.tips.length){

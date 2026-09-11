@@ -241,7 +241,10 @@ def _eric_search(client: httpx.Client, entry: dict) -> dict | None:
             q = q[: q.rfind(" ")]
     try:
         r = _get_with_retry(client, "https://api.ies.ed.gov/eric/",
-                            params={"search": f"title:{q}", "format": "json", "rows": 8})
+                            params={"search": f"title:{q}", "format": "json", "rows": 8,
+                                    # 기본 응답에는 학술지명(source)·권호면수(sourceid)가 없다(2026-09-11 실측)
+                                    "fields": "id,title,author,source,sourceid,publicationdateyear,"
+                                              "issn,url,publicationtype"})
         if r.status_code != 200:
             return None
         docs = (r.json().get("response") or {}).get("docs") or []
@@ -263,17 +266,93 @@ def _eric_search(client: httpx.Client, entry: dict) -> dict | None:
     return None
 
 
+# v·n·p 뒤에 숫자가 와야 권·호·면수다 — 'Nov 1999'의 'Nov'를 호로 읽지 않게
+_ERIC_SRCID_RE = re.compile(r"(?:\bv(?P<v>\d[\w\-]*))?\s*(?:\bn(?P<n>\d[\w\-]*))?\s*(?:\bp(?P<p1>\d+)(?:-(?P<p2>\d+))?)?")
+
+
+def _parse_eric_sourceid(s: str) -> dict:
+    """ERIC sourceid 'v43 n9 p626-39 May 1990' → {volume: 43, issue: 9, pages: 626-639}.
+
+    ERIC은 끝 면수를 앞자리를 떼고 적는다(626-39) — 앞 면수의 자릿수로 되살린다.
+    권 없이 통권만 있는 학술지는 'n104 p1-9'처럼 온다.
+    """
+    out = {"volume": "", "issue": "", "pages": ""}
+    s = (s or "").strip()
+    if not s:
+        return out
+    m = _ERIC_SRCID_RE.search(s)
+    if not m:
+        return out
+    out["volume"] = m.group("v") or ""
+    out["issue"] = m.group("n") or ""
+    p1, p2 = m.group("p1"), m.group("p2")
+    if p1 and p2:
+        if len(p2) < len(p1):
+            p2 = p1[:len(p1) - len(p2)] + p2
+        out["pages"] = f"{p1}-{p2}"
+    elif p1:
+        out["pages"] = p1
+    return out
+
+
 def _meta_from_eric(d: dict) -> dict:
     src = d.get("source")
+    bib = _parse_eric_sourceid(d.get("sourceid") or "")
     return {
-        "title": html.unescape(d.get("title") or ""),
+        "title": html.unescape(d.get("title") or "").rstrip("."),
         "container": html.unescape(src) if isinstance(src, str) else "",
         "year": str(d.get("publicationdateyear") or ""),
-        "volume": str(d.get("volume")) if d.get("volume") else "",
-        "issue": "", "pages": "", "doi": "", "publisher": "", "isbn": "",
+        "volume": bib["volume"] or (str(d.get("volume")) if d.get("volume") else ""),
+        "issue": bib["issue"], "pages": bib["pages"], "doi": "", "publisher": "", "isbn": "",
         "authors": d.get("author") or [],
+        "eric_id": d.get("id") or "",
         "source": "ERIC",
     }
+
+
+def _eric_print_crosscheck(client: httpx.Client, entry: dict, result: dict) -> None:
+    """Crossref로 실존을 확인한 서양 학술지 논문의 권·호·면수를 ERIC 인쇄본 서지와 교차 확인.
+
+    Crossref 등록은 출판사 온라인 체계를 따라 인쇄본과 어긋나기도 한다(2026-09-11 실측:
+    McKenna & Kear 1990, The Reading Teacher — Crossref 43(8), ERIC·JSTOR 43(9), DOI도
+    rt.43.8.3). 참고문헌은 인쇄본 서지가 기준이므로 두 정보원이 갈리면 원고가 어느 쪽과
+    같은지 보고, 원고와 같은 값은 교정 제안하지 않는다. 둘 다 원고와 다르면 인쇄본(ERIC)을
+    권한다. ERIC 미수록·조회 실패는 조용히 넘긴다(부가 확인).
+    """
+    meta = result.get("meta")
+    if not meta or not any(entry.get(k) for k in ("volume", "issue", "pages")):
+        return
+    er, _err = _safe(_eric_search, client, entry)
+    if not er:
+        return
+    bib = _parse_eric_sourceid(er.get("sourceid") or "")
+    if not any(bib.values()):
+        return
+    notes = []
+    for k, label in (("volume", "권"), ("issue", "호"), ("pages", "면수")):
+        ev, cv, mine = bib.get(k, ""), (meta.get(k) or ""), (entry.get(k) or "")
+        nz = lambda x: re.sub(r"\D", "", x or "")
+        if not ev:
+            continue
+        if not cv:
+            meta[k] = ev          # Crossref에 없는 항목은 ERIC으로 채운다
+            continue
+        if nz(ev) == nz(cv):
+            continue
+        # 두 정보원이 갈린다 — 원고와 같은 쪽을 기준으로 삼아 헛제안을 막는다
+        if nz(mine) == nz(ev):
+            meta[k] = ev
+            notes.append(f"{label} Crossref {cv} / ERIC(인쇄본) {ev} — 원고와 같은 ERIC 기준")
+        elif nz(mine) == nz(cv):
+            notes.append(f"{label} Crossref {cv} / ERIC(인쇄본) {ev} — 원고와 같은 Crossref 기준")
+        else:
+            meta[k] = ev
+            notes.append(f"{label} Crossref {cv} / ERIC(인쇄본) {ev} — 인쇄본 기준으로 제안")
+    if er.get("id"):
+        meta["eric_id"] = er["id"]
+    if notes:
+        meta["source"] = "Crossref·ERIC"
+        result["detail"] += " · " + " · ".join(notes)
 
 
 def _s2_match(client: httpx.Client, entry: dict) -> dict | None:
@@ -301,6 +380,21 @@ def _s2_match(client: httpx.Client, entry: dict) -> dict | None:
 
 # ================================================================ 메타데이터 정규화
 
+def clean_pages(s: str) -> str:
+    """정보원의 면수 표기를 '382-386' 꼴로 — 깨진 구분자·대시 이형·'--'를 하이픈 하나로.
+
+    Crossref에는 출판사가 잘못 올린 '382???386'(엔대시가 깨진 것) 같은 값이 그대로 실려
+    있다(2026-09-11 실측: Lynn 1986, Nursing Research — Ovid 원문은 382-386). 숫자 사이의
+    글자·숫자가 아닌 문자 뭉치는 모두 구분자로 본다(사용자 확정: 고쳐서 제안).
+    """
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = s.replace("–", "-").replace("—", "-").replace("--", "-")
+    s = re.sub(r"(?<=\d)[^0-9A-Za-z]+(?=\d)", "-", s)
+    return re.sub(r"\s+", "", s)
+
+
 def _meta_from_crossref(m: dict) -> dict:
     parts = (m.get("issued") or {}).get("date-parts") or [[None]]
     isbns = m.get("ISBN") or []
@@ -322,7 +416,7 @@ def _meta_from_crossref(m: dict) -> dict:
         "volume": m.get("volume", "") or "",
         "issue": m.get("issue", "") or "",
         # 면수 없는 온라인 학술지는 article-number가 면수 자리를 대신한다(APA 7 준용)
-        "pages": (m.get("page") or m.get("article-number") or "").replace("--", "-"),
+        "pages": clean_pages(m.get("page") or m.get("article-number") or ""),
         "doi": m.get("DOI", "") or "",
         "publisher": html.unescape(m.get("publisher", "") or ""),
         "isbn": (isbns[0] if isbns else ""),
@@ -387,6 +481,12 @@ def _meta_kr_for_entry(entry: dict, kci: dict) -> dict:
     meta = _meta_from_kr(kci)
     if meta.get("title_en") and not _HANGUL_RE.search(entry.get("title", "")):
         meta["title"] = meta["title_en"]
+    # 권 없이 통권 번호만 매기는 학술지(국어교육 170, 독서연구 56 등)는 KCI가 그 번호를
+    # <issue>에 싣고 <volume>은 비워 둔다. 참고문헌은 그 번호를 권 자리에 쓰므로
+    # (문편협 예시 'Advances in Consumer Research, 13, 208-212.') 원고가 호 없이 권만
+    # 적었으면 KCI의 호를 권으로 옮겨 대조한다 — '호 (없음)→170' 오제안 방지(2026-09-11 실측)
+    if meta.get("issue") and not meta.get("volume") and not (entry.get("issue") or "").strip():
+        meta["volume"], meta["issue"] = meta["issue"], ""
     return meta
 
 
@@ -722,10 +822,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                                  or kci2.get("sim", 0) >= 0.9):
                         result["meta"] = _meta_kr_for_entry(entry, kci2)
                         result["detail"] += " · 서지는 KCI 기준(국문)"
-            # 발행본에서 등록된 로마자 저자 표기 — 화면의 '표기 대조' 근거로만 싣는다
-            cr_au = _crossref_authors_en(meta)
-            if cr_au and result.get("meta") is not None:
-                result["meta"]["authors_cr"] = cr_au
+                if lang == "west" and etype == "journal":
+                    _eric_print_crosscheck(client, entry, result)
             elif kci:
                 my_lang = "국문" if _HANGUL_RE.search(entry.get("title", "")) else "영문"
                 cr_lang = "국문" if _HANGUL_RE.search(cr_title) else "영문"
@@ -737,6 +835,13 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 result.update(status="mismatch", source="Crossref",
                               detail=f"DOI는 존재하나 제목 불일치({sim:.0%}) — Crossref: “{cr_title[:80]}” · 확인 필요",
                               meta=_meta_from_crossref(meta))
+            # 발행본에서 등록된 로마자 저자 표기 — 화면의 '표기 대조' 근거로만 싣는다.
+            # 이 블록이 위 if/elif 사이에 끼어 있어(2026.09.07-07) Crossref에 로마자 저자가 없는
+            # 국내 논문은 제목이 100% 일치해도 else로 떨어져 '서지 불일치'가 되었다(2026-09-11 신고:
+            # 장은섭 2019). 판정 사슬 뒤로 옮긴다.
+            cr_au = _crossref_authors_en(meta)
+            if cr_au and result.get("meta") is not None:
+                result["meta"]["authors_cr"] = cr_au
             result["retraction"] = _check_retraction(meta)
             if result["retraction"]:
                 lab = result["retraction"]["label"]
@@ -1069,6 +1174,39 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             result.update(status="not_found", detail=note)
         return result
 
+    # ---- 3-2) 법령 — 국가법령정보센터(법제처)에서 실존·현행 공포번호·영문 법령명 대조
+    #      (사용자 요청 2026-09-11). 공포번호가 현행과 다르면 갱신 검토 제안(_build_suggestions).
+    if etype == "law" and _HANGUL_RE.search(entry.get("title", "")):
+        law, e_law = _safe(verify_kr.law_search, client, entry.get("title", ""))
+        lookup_err |= e_law
+        if law:
+            my_no = _law_no_digits(entry.get("report_no") or entry.get("raw") or "")
+            detail = (f"국가법령정보센터 확인 · 현행 {law['no_label']}"
+                      f"({verify_kr._law_date(law['date'])} {law['amend']}, "
+                      f"시행 {verify_kr._law_date(law['eff'])})")
+            if law.get("name_en"):
+                detail += f" · 영문 법령명(법제처 영어번역) {law['name_en']}"
+            if my_no and law.get("no") and my_no != law["no"]:
+                detail += (f" · 원고의 제{my_no}호는 현행 공포번호와 다름 — 이전 개정본을 인용한 "
+                           "것이면 그대로, 현행법을 뜻한다면 갱신")
+            if law.get("by_abbr"):
+                detail += f" · 원고의 '{entry.get('title', '').strip()}'은 약칭 — 정식 명칭은 '{law['name']}'"
+            result.update(status="verified", source="국가법령정보센터", detail=detail,
+                          meta={"source": "국가법령정보센터", "title": law["name"],
+                                "title_en": law.get("name_en", ""), "report_no": law["no_label"],
+                                "law_url": law["url"], "law_en_url": law["en_url"],
+                                "law_kind": law["kind"], "law_date": verify_kr._law_date(law["date"]),
+                                "law_eff": verify_kr._law_date(law["eff"])})
+            return result
+        if lookup_err:
+            _mark_lookup_failed(result)
+        else:
+            result.update(status="not_found", source="국가법령정보센터",
+                          detail="국가법령정보센터에서 같은 이름의 법령을 찾지 못함 — 약칭·옛 명칭이면 "
+                                 "정식 명칭으로(예: 학교도서관법 → 학교도서관진흥법), 시행령·시행규칙은 "
+                                 "그 이름까지 적었는지 확인")
+        return result
+
     # ---- 4) URL만 있는 자료
     url = (entry.get("url") or "").strip()
     if url:
@@ -1078,6 +1216,12 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
 
     result.update(detail="검증 대상 아님(오프라인 자료)")
     return result
+
+
+def _law_no_digits(s: str) -> str:
+    """'법률 제21447호' / 'Act No. 21447' → '21447'."""
+    m = re.search(r"제\s*(\d+)\s*호|No\.?\s*(\d+)", s or "")
+    return (m.group(1) or m.group(2)) if m else ""
 
 
 def verify_entries(entries: list[dict], progress_cb=None) -> list[dict]:

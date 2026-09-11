@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.11-02"
+APP_VERSION = "2026.09.11-03"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -596,6 +596,56 @@ def _author_name_note(ko_name: str, fixed: str, hist: list, cr: str, kci: str) -
     return " · ".join(parts)
 
 
+def _drop_resolved_notes(e: dict, v: dict) -> None:
+    """AI 구조화가 남긴 '확인 필요' 메모 가운데 검증이 해소한 것을 지운다.
+
+    'DOI 확인 필요'는 그 DOI로 실존이 확인되면, 법령의 '시행일/제개정 연도 확인 필요'는
+    국가법령정보센터가 현행 법령을 확인하면 더 이상 확인할 것이 없다 — 확인된 항목에
+    ⚠가 그대로 남아 이용자를 혼란스럽게 하던 문제(2026-09-11 신고).
+    """
+    notes = e.get("notes") or []
+    if not notes:
+        return
+    meta = v.get("meta") or {}
+    doi_ok = bool(e.get("doi")) and (
+        (meta.get("doi") or "").lower() == e["doi"].lower()
+        or (v.get("found_doi") or "").lower() == e["doi"].lower()
+        or "DOI 확인됨" in (v.get("detail") or ""))
+    law_ok = e.get("type") == "law" and v.get("source") == "국가법령정보센터"
+    keep = []
+    for n in notes:
+        s = str(n)
+        if doi_ok and re.search(r"DOI", s, re.I) and "확인" in s:
+            continue
+        if law_ok and re.search(r"제정\s*연도|시행일|제개정|공포", s) and "확인" in s:
+            continue
+        keep.append(n)
+    e["notes"] = keep
+
+
+_DOI_URL_RE = re.compile(r"https?://(?:dx\.|www\.)?doi\.org/\S+", re.I)
+
+
+def _tip_applies(tip: dict, item: dict) -> bool:
+    """이미 규칙대로 작성된 항목에는 작성 제안을 붙이지 않는다.
+
+    DOI 형식 제안('https://doi.org/로 시작하는 전체 URL, 끝에 마침표 없음')이 그렇게 바르게 적은
+    항목에도 AI 대조를 통해 붙던 문제(2026-09-11 신고). 규칙 문구가 DOI 형식을 다루면 항목의
+    DOI 표기를 직접 검사해 걸러 낸다.
+    """
+    text = f"{tip.get('rule', '')} {tip.get('label', '')}"
+    if "doi.org" in text.lower():
+        f = item.get("formatted") or ""
+        m = _DOI_URL_RE.search(f)
+        if m:
+            url = m.group(0)
+            std = url.startswith("https://doi.org/") and not url.endswith((".", ",", ";"))
+            bare = re.search(r"(?<![/\w])10\.\d{4,9}/", f.replace(url, ""))  # URL 밖의 맨 DOI
+            if std and not bare:
+                return False
+    return True
+
+
 def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
     """검증에서 매칭된 정규 서지(meta)와 파싱 결과의 차이 → 필드별 수정 제안."""
     if not meta:
@@ -606,9 +656,24 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
     if entry.get("type") == "thesis":
         fields += _THESIS_SUGGEST_FIELDS
     out = []
+    # 법령: 현행 공포번호가 다르면 갱신 검토 제안 — 이전 개정본을 일부러 인용한 논문도 있어
+    # 자동 적용은 이용자 선택(자동 교정 옵션)에 맡긴다
+    if entry.get("type") == "law" and meta.get("report_no"):
+        cur = (entry.get("report_no") or "").strip()
+        if verify_mod._law_no_digits(cur) != verify_mod._law_no_digits(meta["report_no"]):
+            out.append({"field": "report_no", "label": "공포번호", "current": cur or "(없음)",
+                        "suggested": meta["report_no"], "source": meta.get("source", "")})
+        # 약칭으로 적은 법령명은 정식 명칭으로(국가법령정보센터 등록명)
+        t_cur = (entry.get("title") or "").strip()
+        if meta.get("title") and t_cur and _norm_for_compare(t_cur) != _norm_for_compare(meta["title"]):
+            out.append({"field": "title", "label": "법령명", "current": t_cur,
+                        "suggested": meta["title"], "source": meta.get("source", "")})
+        return out
     for f, label in fields:
         cur = (entry.get(f) or "").strip()
         new = (meta.get(f) or "").strip().replace("–", "-")
+        if f == "pages":
+            new = verify_mod.clean_pages(new)   # '382???386' 같은 깨진 등록값은 고쳐서 제안(사용자 확정)
         if f == "year":
             cur = re.sub(r"[a-z]$", "", cur)
             if not re.fullmatch(r"\d{4}", new):
@@ -678,6 +743,17 @@ def _pair_manuscript_conversions(entries: list[dict]) -> dict[int, int]:
             continue
         for j in conv_idx:
             if j not in used and (entries[j].get("doi") or "").lower() == d:
+                pairs[i] = j
+                used.add(j)
+                break
+    for i in orig_idx:                       # ①-2 법령: 공포번호 일치('법률 제21447호' ↔ 'Act No. 21447')
+        if i in pairs or entries[i].get("type") != "law":
+            continue
+        no = verify_mod._law_no_digits(entries[i].get("report_no") or entries[i].get("raw") or "")
+        if not no:
+            continue
+        for j in conv_idx:
+            if j not in used and entries[j].get("type") == "law" and                     verify_mod._law_no_digits(entries[j].get("report_no") or entries[j].get("raw") or "") == no:
                 pairs[i] = j
                 used.add(j)
                 break
@@ -911,6 +987,13 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
         # 소절 표제 기반 플래그를 항목까지 전달 — crosscheck·정렬·그룹핑이 우선 사용
         for e, is_conv in zip(entries, conv_flag_by_idx):
             e["is_en_conversion"] = is_conv
+            if is_conv:
+                # AI 구조화가 서양식으로 'Yang, Sooyeon'을 'Yang, S.'로 줄여 오는 수가 있다
+                # (2026-09-11 실측) — 변환 항목은 전체 이름이 규칙이므로 원문에서 되살린다
+                full = formatter.authors_from_en_raw(e.get("raw", ""))
+                if full and formatter.has_initials(e.get("authors") or []) \
+                        and len(full) == len(e.get("authors") or full):
+                    e["authors"] = full
 
     # 5) 실존·윤리 검증(형식 변환 전에 수행해 발견된 DOI·교정을 반영)
     verify_results = None
@@ -919,15 +1002,16 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     if options.get("verify"):
         # 가장 오래 걸리는 구간 — 몇 건째 조회 중인지 실시간으로 알린다
         def _verify_progress(done: int, total: int):
-            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 11개 정보원, {done}/{total}건 조회)", filename)
+            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 12개 정보원, {done}/{total}건 조회)", filename)
 
-        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 11개 정보원, {len(entries)}건)", filename)
+        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 12개 정보원, {len(entries)}건)", filename)
         verify_results = verify_mod.verify_entries(entries, progress_cb=_verify_progress)
         for i, (e, v) in enumerate(zip(entries, verify_results)):
             if v.get("status") != "verified":
                 continue  # mismatch 등 불확실 매칭의 서지는 교정·DOI 반영에 사용하지 않음
             if v.get("found_doi") and not e.get("doi"):
                 e["doi"] = v["found_doi"]
+            _drop_resolved_notes(e, v)
             sugg = _build_suggestions(e, v.get("meta"))
             if sugg:
                 if options.get("autofix"):
@@ -945,6 +1029,9 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
         if verify_results:
             for ko_i, conv_j in conv_pairs.items():
                 v = verify_results[ko_i] or {}
+                if v.get("status") == "verified":
+                    # 원문이 확인됐으면 그 변환 표기의 'DOI·공포일 확인 필요' 메모도 해소된 것이다
+                    _drop_resolved_notes(entries[conv_j], v)
                 meta = v.get("meta") if v.get("status") == "verified" else None
                 title_en = (meta or {}).get("title_en") or ""
                 conv_title = entries[conv_j].get("title") or ""
@@ -1108,12 +1195,14 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
             for i, ids in tips_by_idx.items():
                 if 0 <= i < len(items):
                     items[i]["tips"] = [
-                        {"id": sid, "source": by_id[sid]["source"], "label": by_id[sid]["label"],
-                         "topic": by_id[sid].get("topic", ""), "rule": by_id[sid].get("rule", ""),
-                         "example": by_id[sid].get("example", ""),
-                         # 서양 문헌에는 서양 사례를 보여준다(이용자 피드백) — 표시부에서 lang으로 선택
-                         "example_west": by_id[sid].get("example_west", "")}
-                        for sid in ids if sid in by_id]
+                        tp for tp in (
+                            {"id": sid, "source": by_id[sid]["source"], "label": by_id[sid]["label"],
+                             "topic": by_id[sid].get("topic", ""), "rule": by_id[sid].get("rule", ""),
+                             "example": by_id[sid].get("example", ""),
+                             # 서양 문헌에는 서양 사례를 보여준다(이용자 피드백) — 표시부에서 lang으로 선택
+                             "example_west": by_id[sid].get("example_west", "")}
+                            for sid in ids if sid in by_id)
+                        if _tip_applies(tp, items[i])]
     result["items"] = items
 
     # 7) 본문 인용 대조
@@ -2149,6 +2238,10 @@ def get_sources():
              "state": "on" if kr.get("nlk") else "off"},
             {"name": "국회도서관 국가학술정보", "role": "학위논문·단행본 폴백 대조",
              "state": "on" if kr.get("nanet") else "off"},
+            {"name": "국가법령정보센터 (법제처)",
+             "role": "법령 실존·현행 공포번호·시행일 대조, 영어번역 법령명(영문 변환 목록에 사용)"
+                     + ("" if kr.get("law_oc", "test") != "test" else " — 공동활용 예시 계정으로 조회 중(.env LAW_OC 권장)"),
+             "state": "on"},
         ],
         "overseas": [
             {"name": "Crossref", "role": "DOI 조회·서지 대조, 철회(Retraction)·정정 정보", "state": "on"},
@@ -2163,6 +2256,7 @@ def get_sources():
         "note": ("국내 학술지 논문은 KCI를 전거로 대조한 뒤 RISS로 한 번 더 교차 확인합니다"
                  "(KCI 미등재지는 RISS → Crossref 순). 학위논문은 RISS(국내·해외) → 국회도서관, "
                  "단행본·보고서는 국립중앙도서관 → 국회도서관 → RISS 순으로 대조합니다. "
+                 "법령은 국가법령정보센터에서 현행 공포번호와 영문 법령명을 확인합니다. "
                  "해외 문헌은 Crossref를 시작으로 OpenAlex·Semantic Scholar·ERIC 순서로 대조하고, "
                  "국내 논문의 영문 인용은 KCI·RISS의 공식 영문 제목으로도 대조하며, 국내 문헌이라도 "
                  "DOI가 있으면 해외 정보원에서 함께 확인합니다. 그래도 확인되지 않은 항목에는 "

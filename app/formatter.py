@@ -100,12 +100,49 @@ def _west_author(name: str, keep_full: bool = False) -> str:
         if len(parts) == 1:
             return name
         last, first = parts[-1], " ".join(parts[:-1])
-    if keep_full or _east_asian_full_name(last, first):
+    if (keep_full and not _is_initials(first)) or _east_asian_full_name(last, first):
         return f"{last}, {first}" if first else last
     initials = " ".join(
         f"{w[0].upper()}." for w in re.split(r"[\s\.\-]+", first) if w and w[0].isalpha()
     )
     return f"{last}, {initials}" if initials else last
+
+
+def _is_initials(first: str) -> bool:
+    """'S.', 'S. S', 'M.C.'처럼 이미 두문자인 이름 — 전체 이름으로 되돌릴 수 없으니 두문자 표기로 정리."""
+    toks = [t for t in re.split(r"[\s\.\-]+", first or "") if t]
+    return bool(toks) and all(len(t) == 1 for t in toks)
+
+
+def has_initials(authors: list[str]) -> bool:
+    """저자 목록에 두문자로 줄어든 이름이 있는가('Yang, S.' / 'Park, S. S.')."""
+    for a in authors or []:
+        if "," in a and _is_initials(a.split(",", 1)[1].strip()):
+            return True
+    return False
+
+
+_EN_AUTHOR_HEAD_RE = re.compile(r"^(.*?)\s\((\d{4}[a-z]?|n\.d\.)\)")
+
+
+def authors_from_en_raw(raw: str) -> list[str]:
+    """영문 변환 항목 원문의 저자부('Yang, Sooyeon, Park, Seong Seog, & Min, Byeonggon (2020)…')
+    → ['Yang, Sooyeon', 'Park, Seong Seog', 'Min, Byeonggon']. 저자부를 못 찾으면 []."""
+    m = _EN_AUTHOR_HEAD_RE.match(re.sub(r"\s+", " ", raw or "").strip())
+    if not m:
+        return []
+    seg = m.group(1).strip()
+    if not seg or _is_org_name(seg) and "," not in seg:
+        return []
+    pieces = [p.strip() for p in re.split(r",\s*&\s*|\s&\s|;\s*", seg) if p.strip()]
+    out: list[str] = []
+    for piece in pieces:
+        toks = [t.strip() for t in piece.split(",") if t.strip()]
+        if len(toks) >= 2 and len(toks) % 2 == 0:
+            out.extend(f"{toks[i]}, {toks[i + 1]}" for i in range(0, len(toks), 2))
+        else:
+            out.append(piece)
+    return out
 
 
 def format_authors(entry: dict) -> str:

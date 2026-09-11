@@ -66,6 +66,8 @@ def kr_api_status() -> dict:
         "nanet": bool(env_get("NANET_API_KEY")),
         # 인증 오류가 확정된 뒤에는 False — 판정 문구가 'RISS까지 대조했다'고 주장하지 않게
         "riss": riss_enabled(),
+        # 국가법령정보센터는 키 없이도 조회된다(활용 안내서의 예시 OC) — 자기 OC를 두면 그것을 쓴다
+        "law": True, "law_oc": law_oc(),
     }
 
 
@@ -1014,3 +1016,125 @@ def riss_reg_label(reg: str) -> str:
     if other:
         label = (label + "(" + "·".join(other) + ")") if label else "·".join(other)
     return label
+
+
+# ---------------------------------------------------------------- 국가법령정보센터(법제처)
+# 법령 목록 조회 Open API(open.law.go.kr, 국가법령정보 공동활용) — 법령의 실존, 현행 공포번호·
+# 공포일·시행일, 영어번역 법령명(target=elaw)을 준다. 참고문헌의 법령 항목('독서문화진흥법.
+# 법률 제21447호.')을 대조하고 영문 변환 목록에 공식 영문 법령명(READING CULTURE PROMOTION
+# ACT → Reading Culture Promotion Act)을 쓰기 위한 것(사용자 요청 2026-09-11).
+LAW_SEARCH_URL = "https://www.law.go.kr/DRF/lawSearch.do"
+_LAW_TAG_RE = re.compile(r"<[^>]+>")   # 검색어 강조 <strong> 태그가 법령명 안에 섞여 온다
+_LAW_SMALL_WORDS = {"a", "an", "the", "and", "or", "of", "in", "on", "for", "to", "with", "at",
+                    "by", "from", "as"}
+
+
+def law_oc() -> str:
+    """공동활용 OC(신청자의 이메일 ID). 미설정이면 활용 안내서가 예시로 쓰는 'test'.
+
+    운영 서버는 open.law.go.kr에서 공동활용을 신청하고(서버 IP·도메인 등록) .env LAW_OC에
+    자기 ID를 두는 것이 원칙이다 — 예시 계정이 막히면 법령만 '확인 못 함'이 된다.
+    """
+    return env_get("LAW_OC").strip() or "test"
+
+
+def _law_clean(s: str) -> str:
+    return re.sub(r"\s+", " ", _LAW_TAG_RE.sub("", s or "")).strip()
+
+
+def _law_key(name: str) -> str:
+    """법령명 비교 키 — 공백·괄호 안 부기 제거, 「」 벗기기."""
+    s = _law_clean(name)
+    s = re.sub(r"[「」『』\"'“”‘’]", "", s)
+    s = re.sub(r"\([^)]*\)", "", s)
+    return re.sub(r"\s+", "", s)
+
+
+def _law_date(yyyymmdd: str) -> str:
+    """'20260305' → '2026. 3. 5.'(국문 참고문헌의 날짜 표기)."""
+    d = re.sub(r"\D", "", yyyymmdd or "")
+    if len(d) != 8:
+        return yyyymmdd or ""
+    return f"{int(d[:4])}. {int(d[4:6])}. {int(d[6:])}."
+
+
+def law_title_case(s: str) -> str:
+    """'ENFORCEMENT DECREE OF THE READING CULTURE PROMOTION ACT' → 'Enforcement Decree of the
+    Reading Culture Promotion Act'. 법제처 영어번역 법령명은 전부 대문자로 등록돼 있다."""
+    words = _law_clean(s).lower().split()
+    out = []
+    for i, w in enumerate(words):
+        if i > 0 and w in _LAW_SMALL_WORDS:
+            out.append(w)
+        else:
+            out.append(w[:1].upper() + w[1:])
+    return " ".join(out)
+
+
+def _law_items(client: httpx.Client, target: str, query: str) -> list[dict]:
+    """lawSearch.do 한 번 — 결과 목록. OC 오류(HTTP 200 + <Response>)는 LookupUnavailable."""
+    r = _get(client, LAW_SEARCH_URL,
+             {"OC": law_oc(), "target": target, "type": "XML", "query": query, "display": 20})
+    if r is None:
+        return []
+    root = _xml_root(r.text)
+    if root is None:
+        raise LookupUnavailable("국가법령정보센터 응답을 읽지 못함")
+    if root.tag != "LawSearch":
+        msg = (root.findtext("result") or root.findtext("msg") or root.tag or "").strip()
+        raise LookupUnavailable(f"국가법령정보센터: {msg[:80]}")
+    out = []
+    for el in root.iter("law"):
+        g = lambda tag: _law_clean(el.findtext(tag) or "")
+        out.append({
+            "name": g("법령명한글"), "abbr": g("법령약칭명"), "name_en": g("법령명영문"),
+            "law_id": g("법령ID"),
+            "kind": g("법령구분명"), "no": g("공포번호"), "date": g("공포일자"),
+            "eff": g("시행일자"), "amend": g("제개정구분명"), "dept": g("소관부처명"),
+            "hist": g("현행연혁코드"), "seq": g("법령일련번호"),
+        })
+    return out
+
+
+def law_search(client: httpx.Client, name: str) -> dict | None:
+    """법령명으로 현행 법령 1건을 찾는다 — 실존·현행 공포번호·시행일 + 영문 법령명.
+
+    반환: {"name", "kind", "no", "date"(공포일), "eff"(시행일), "amend", "dept", "law_id",
+           "no_label"('법률 제21447호'), "name_en"('Reading Culture Promotion Act' 또는 ''),
+           "url"(국가법령정보센터 법령 페이지), "en_url"(영어번역 검색 페이지)}
+    None: 같은 이름의 법령 없음. LookupUnavailable: 조회 실패(OC 오류·네트워크).
+    '독서문화진흥법 시행령'처럼 시행령·시행규칙까지 이름이 정확히 같아야 잡는다 — 이름 앞부분만
+    같은 법령(시행령)을 본법으로 오인하지 않기 위해.
+    """
+    key = _law_key(name)
+    if len(key) < 2:
+        return None
+    query = _law_clean(re.sub(r"[「」『』]", "", name))
+    items = _law_items(client, "law", query)
+    if not items and " " in query:
+        # '독서문화 진흥법'처럼 띄어쓰기가 등록명과 다르면 검색이 비는 수가 있다 — 붙여서 한 번 더
+        items = _law_items(client, "law", query.replace(" ", ""))
+    exact = [it for it in items if _law_key(it["name"]) == key]
+    by_abbr = False
+    if not exact:  # 약칭('학교도서관법')으로 적은 원고 — 정식 명칭('학교도서관진흥법')을 찾아 준다
+        exact = [it for it in items if it.get("abbr") and _law_key(it["abbr"]) == key]
+        by_abbr = bool(exact)
+    if not exact:
+        return None
+    exact.sort(key=lambda it: (it["hist"] != "현행", -int(it["date"] or 0)))
+    law = exact[0]
+    law["by_abbr"] = by_abbr
+    en = ""
+    try:  # 영문명은 부가 정보 — 실패해도 실존 판정은 유지. 정식 명칭으로 다시 찾는다(약칭 대비)
+        for it in _law_items(client, "elaw", law["name"]):
+            if _law_key(it["name"]) == _law_key(law["name"]) and it.get("name_en"):
+                en = law_title_case(it["name_en"])
+                break
+    except LookupUnavailable:
+        pass
+    law["name_en"] = en
+    law["no_label"] = f"{law['kind']} 제{law['no']}호" if law["no"] else ""
+    law["url"] = "https://www.law.go.kr/법령/" + law["name"]
+    law["en_url"] = ("https://www.law.go.kr/engLsSc.do?menuId=1&subMenuId=21&tabMenuId=117&query="
+                     + law["name"])
+    return law

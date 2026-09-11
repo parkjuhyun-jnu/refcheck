@@ -297,4 +297,18 @@ ab = [{"authors": ["全国学校図書館協議会"], "year": "2025b", "title": 
       {"authors": ["全国学校図書館協議会"], "year": "2025a", "title": "第70回 学校読書調査の結果", "lang": "east"}]
 ok([e["year"] for e in formatter.sort_and_disambiguate(ab)] == ["2025a", "2025b"], "a/b 부기 순서대로 배열")
 
+# ---------------------------------------------------------------- 8) KCI 통권 번호 (2026.09.11-03)
+print("[8] KCI가 통권 번호를 <issue>에 싣는 학술지 — 호 오제안 방지")
+import verify
+kci = {"title": "중학교 1∼3학년 읽기 능력 검사 도구 개발 및 IRT 분석을 통한 타당화 연구", "container": "국어교육",
+       "year": "2020", "volume": "", "issue": "170", "pages": "81-122", "doi": "10.29401/KLE.170.3", "source": "KCI"}
+e_vol = {"type": "journal", "title": kci["title"], "year": "2020", "volume": "170", "issue": "", "pages": "81-122"}
+m = verify._meta_kr_for_entry(e_vol, kci)
+ok(m["volume"] == "170" and m["issue"] == "", "원고가 호 없이 권만 적었으면 KCI의 호(170)를 권으로 옮김")
+import main as main_mod2
+ok(main_mod2._build_suggestions(e_vol, m) == [], "'호 (없음)→170' 제안이 나오지 않음(국어교육 170 실측)")
+e_iss = dict(e_vol, issue="3")
+m2 = verify._meta_kr_for_entry(e_iss, kci)
+ok(m2["issue"] == "170" and m2["volume"] == "", "원고가 호를 적었으면 KCI 값 그대로 대조")
+
 print(f"\n전체 {_PASS}건 통과")
