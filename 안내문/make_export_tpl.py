@@ -23,6 +23,7 @@ def mm(v): return int(round(v * HWPUNIT_MM))
 NAVY_DEEP = "#16385A"
 INK = "#17232F"
 GREY = "#7C8B9B"
+RED = "#B03A2E"      # 결과 DOCX 대비표의 '바뀐 부분' 색과 동일
 
 # 결과 문서용 글자모양 (id, 크기pt, 굵게, 색, 글꼴 1=맑은 고딕 4=함초롬바탕)
 CHAR_PRS = [
@@ -30,6 +31,7 @@ CHAR_PRS = [
     (47, 10.5, True,  NAVY_DEEP, 1),   # 그룹 표제([국내문헌] 등)
     (48,  9.5, False, INK,       1),   # 참고문헌 항목
     (49,  8.5, False, GREY,      1),   # 메타·꼬리말
+    (50,  9.5, False, RED,       1),   # 항목 중 원고와 달라진 부분(빨간색 표시)
 ]
 CHAR_TPL = (
     '<hh:charPr id="{id}" height="{h}" textColor="{color}" shadeColor="none" '
@@ -128,7 +130,7 @@ def main():
         '# -*- coding: utf-8 -*-\n'
         '"""HWPX 내보내기용 내장 템플릿 — 안내문/make_export_tpl.py가 생성(직접 수정 금지).\n\n'
         '학회 원고형식 HWPX의 글꼴·스타일 정의(header.xml)에 결과 문서용 글자·문단모양\n'
-        '(46~49번 글자, 51~54번 문단 — 53번이 참고문헌 내어쓰기)을 덧붙여 zip째 담았다.\n'
+        '(46~50번 글자 — 50번이 변경 표시용 빨간색, 51~54번 문단 — 53번이 참고문헌 내어쓰기)을 덧붙여 zip째 담았다.\n'
         'section0.xml은 없다 — hwpx_export.py가 실행 시점에 새로 써 넣는다.\n"""\n\n'
         'TPL_ZIP_B64 = (\n' + body + '\n)\n',
         encoding="utf-8")

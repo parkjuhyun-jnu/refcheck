@@ -80,7 +80,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.08-06"
+APP_VERSION = "2026.09.11-01"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -94,7 +94,7 @@ if KEY_MIGRATION:
 GROUP_LABEL = {"ko": "국내문헌", "west": "서양문헌", "east": "동양문헌"}
 # 원고가 소절 표제('국한문 참고문헌의 영문 표기' 등)로 명시한 영문 변환 항목의 그룹 —
 # 서양문헌으로 잘못 배열되지 않게 원문 그룹들 뒤에 별도로 모은다
-GROUP_LABEL_CONV = "국문 문헌의 영문 변환 표기"
+GROUP_LABEL_CONV = formatter.GROUP_LABEL_CONV
 
 
 # ================================================================ 관리자 인증
@@ -1062,9 +1062,14 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
             progress(f"영문 변환 목록 생성 ({len(ko_entries)}건)", filename)
             try:
                 eng = aiengine.translate_to_english_ai(ko_entries, official, manuscript)
-                lines = sorted((r.get("formatted", "") for r in eng if r.get("formatted")),
-                               key=str.lower)
-                result["english_list"] = lines
+                # 변환 결과마다 원고에 병기돼 있던 표기 원문을 짝지어 둔다(없으면 '') —
+                # HWPX 내려받기에서 원고와 달라진 부분을 빨간색으로 보이는 근거
+                pairs = sorted(({"formatted": formatter.normalize_en_line(r["formatted"]),
+                                 "raw": manuscript.get(r.get("index"), "")}
+                                for r in eng if r.get("formatted")),
+                               key=lambda p: formatter.en_line_sort_key(p["formatted"]))
+                result["english_list"] = [p["formatted"] for p in pairs]
+                result["english_items"] = pairs
                 if manuscript:
                     result["warnings"].append(
                         f"영문 변환 목록: 원고에 병기된 변환 표기 {len(manuscript)}건을 "
@@ -1073,9 +1078,12 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
                 result["warnings"].append(f"영문 변환 실패({ex})")
         elif ko_entries and any(e.get("is_en_conversion") for e in entries):
             # AI가 없어도 원고가 병기한 변환 표기가 있으면 그것을 형식만 다듬어 목록으로 쓴다
-            lines = sorted((formatter.format_entry(e) for e in entries
-                            if e.get("is_en_conversion")), key=str.lower)
+            pairs = sorted(({"formatted": formatter.format_entry(e), "raw": e.get("raw", "")}
+                            for e in entries if e.get("is_en_conversion")),
+                           key=lambda p: formatter.en_line_sort_key(p["formatted"]))
+            lines = [p["formatted"] for p in pairs]
             result["english_list"] = lines
+            result["english_items"] = pairs
             note = f"영문 변환 목록: 원고에 병기된 변환 표기 {len(lines)}건을 재활용했습니다."
             if len(lines) < len(ko_entries):
                 note += (f" 나머지 국문 문헌 {len(ko_entries) - len(lines)}건의 변환은 "
@@ -2217,7 +2225,7 @@ def _get_result(job: dict, index: int) -> dict:
     return job["results"][index]
 
 
-def _result_download_response(res: dict, fmt: str) -> Response:
+def _result_download_response(res: dict, fmt: str, marks: bool = True) -> Response:
     stem = Path(res.get("filename", "결과")).stem
     if fmt == "txt":
         content = report.build_result_txt(res).encode("utf-8-sig")
@@ -2235,10 +2243,12 @@ def _result_download_response(res: dict, fmt: str) -> Response:
                         headers={"Content-Disposition":
                                  f"attachment; filename*=UTF-8''{_quote(stem + '.bib')}"})
     if fmt == "hwpx":
-        content = hwpx_export.build_result_hwpx(res)
+        # marks: 올린 원고와 달라진 어절을 빨간색으로(기본). 원고에 그대로 붙일 문서는 marks=0
+        content = hwpx_export.build_result_hwpx(res, marks=marks)
+        suffix = "_참고문헌목록.hwpx" if marks else "_참고문헌목록_표시없음.hwpx"
         return Response(content, media_type="application/hwp+zip",
                         headers={"Content-Disposition":
-                                 f"attachment; filename*=UTF-8''{_quote(stem + '_참고문헌목록.hwpx')}"})
+                                 f"attachment; filename*=UTF-8''{_quote(stem + suffix)}"})
     content = report.build_result_docx(res)
     return Response(
         content,
@@ -2248,9 +2258,10 @@ def _result_download_response(res: dict, fmt: str) -> Response:
 
 
 @app.get("/api/jobs/{job_id}/download/{index}")
-def download_result(job_id: str, index: int, request: Request, fmt: str = "docx"):
+def download_result(job_id: str, index: int, request: Request, fmt: str = "docx",
+                    marks: int = 1):
     job = _job_for(job_id, request)
-    return _result_download_response(_get_result(job, index), fmt)
+    return _result_download_response(_get_result(job, index), fmt, marks=bool(marks))
 
 
 # ================================================================ 지난 결과 열람
@@ -2296,13 +2307,13 @@ def view_result(hid: str, request: Request):
 
 
 @app.get("/api/results/{hid}/download")
-def download_saved_result(hid: str, request: Request, fmt: str = "docx"):
+def download_saved_result(hid: str, request: Request, fmt: str = "docx", marks: int = 1):
     require_access(request)
     _get_viewable_record(hid, request)
     res = history_mod.result_view(hid)
     if not res:
         raise HTTPException(404, "저장된 결과를 찾을 수 없습니다.")
-    return _result_download_response(res, fmt)
+    return _result_download_response(res, fmt, marks=bool(marks))
 
 
 @app.get("/api/jobs/{job_id}/download_zip")

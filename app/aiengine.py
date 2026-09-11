@@ -899,6 +899,9 @@ def translate_to_english_ai(entries: list[dict], official: dict[int, dict] | Non
         "저자명(단체명)은 음역(로마자 표기)하고 서명·논문명은 영어로 번역하세요.\n"
         "- 학술지 논문: Author, Fullname (Year). Translated title. Journal Name, vol(iss), pages. DOI\n"
         "- 단행본: Author, Fullname (Year). Translated Title. Place: Publisher.\n"
+        "- 저자 연결: 2인은 'Kim, Gildong & Lee, Younghee', 3인 이상은 'A, B, & C'(마지막 저자 "
+        "앞에만 &, 2인일 때는 & 앞에 쉼표 없음).\n"
+        "- 법령: 'Reading Culture Promotion Act. Act No. 21447.' (법령명 뒤 마침표, 연도 없음).\n"
         "- 원문에 없는 서지요소를 만들지 마세요."
     )
     official = official or {}

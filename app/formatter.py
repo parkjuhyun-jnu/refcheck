@@ -2,6 +2,11 @@
 """문편협 공통기준(2024. 6. 17. 개정) 형식 변환·정렬·형식 검증."""
 import re
 
+# 원고가 소절 표제로 명시한 '국한문 참고문헌의 영문 표기' 항목의 그룹 표제.
+# main(그룹핑)·hwpx_export·report(목록 내보내기)가 같은 문자열을 본다.
+GROUP_LABEL_CONV = "국문 문헌의 영문 변환 표기"
+_CJK_RE = re.compile(r"[가-힣一-鿿぀-ゟ゠-ヿ]")
+
 # ---------------------------------------------------------------- 저자 표기
 
 _SMALL_WORDS = {"a", "an", "the", "and", "or", "of", "in", "on", "for", "to",
@@ -39,16 +44,30 @@ def _is_org_name(name: str) -> bool:
 # 일본 저자는 성명을 그대로 기재'하고 서양 인명만 이름을 두문자로 줄이게 한다.
 # 국문 문헌의 영문 인용(Byun, Woo-Yeoul)을 서양 저자로 보고 'Byun, W. Y.'로
 # 줄이던 문제의 방어선(2026-09 실측).
+# 이 목록은 서양문헌 속 한국인 공저자를 알아보는 보조 단서일 뿐이다 — 빠진 성씨가 나오면
+# 이름이 두문자로 줄어든다(2026-09-11 실측: '천'(Cheon)이 빠져 'Cheon, Gyeongrok'이
+# 'Cheon, G.'로). 그래서 국문 문헌의 영문 변환 항목(is_en_conversion)과 국내문헌은
+# 이 목록과 무관하게 format_authors에서 항상 전체 이름을 유지한다.
 _KR_SURNAMES = {
-    "kim", "lee", "yi", "rhee", "park", "pak", "choi", "choe", "jung", "jeong", "chung",
-    "kang", "gang", "cho", "jo", "yoon", "yun", "jang", "chang", "lim", "im", "rim",
-    "han", "oh", "seo", "suh", "shin", "sin", "kwon", "gwon", "hwang", "ahn", "an",
-    "song", "yoo", "yu", "ryu", "ryoo", "hong", "jeon", "chun", "jun", "ko", "koh",
-    "go", "moon", "mun", "yang", "son", "sohn", "bae", "pae", "baek", "paik", "heo",
-    "hur", "huh", "noh", "roh", "no", "nam", "sim", "shim", "ha", "joo", "ju", "chu",
-    "koo", "gu", "ku", "min", "byun", "byeon", "kwak", "gwak", "sung", "seong", "cha",
-    "woo", "kil", "gil", "hyun", "hyeon", "hu", "na", "ra", "do", "seok", "pyo",
-    "chae", "won", "jin", "ok", "maeng", "bang", "pyeon", "byeong", "myung", "myeong",
+    "kim", "gim", "lee", "yi", "rhee", "ri", "park", "pak", "bak", "choi", "choe",
+    "jung", "jeong", "chung", "cheong", "kang", "gang", "cho", "jo", "yoon", "yun", "youn",
+    "jang", "chang", "lim", "im", "rim", "yim", "han", "oh", "seo", "suh", "shin", "sin",
+    "kwon", "gwon", "kweon", "hwang", "whang", "ahn", "an", "song", "yoo", "yu", "you",
+    "ryu", "ryoo", "lyu", "hong", "jeon", "chun", "jun", "chon", "ko", "koh", "go",
+    "moon", "mun", "yang", "ryang", "son", "sohn", "bae", "pae", "baek", "paik", "baik",
+    "back", "heo", "hur", "huh", "her", "noh", "roh", "no", "ro", "nam", "sim", "shim",
+    "ha", "joo", "ju", "chu", "choo", "koo", "gu", "ku", "goo", "min", "byun", "byeon",
+    "byon", "pyun", "kwak", "gwak", "kwag", "sung", "seong", "cha", "woo", "wu", "kil",
+    "gil", "hyun", "hyeon", "hu", "na", "ra", "nah", "la", "do", "doh", "seok", "suk",
+    "sok", "pyo", "chae", "won", "jin", "chin", "ok", "maeng", "bang", "pang", "pyeon",
+    "pyon", "byeong", "myung", "myeong", "cheon", "cheun", "kong", "gong", "ham", "yeom",
+    "yum", "youm", "yeo", "yuh", "so", "soh", "sun", "seon", "seol", "sul", "ma", "mah",
+    "yeon", "wi", "wee", "ki", "gi", "kee", "ban", "wang", "keum", "geum", "kum", "yook",
+    "yuk", "in", "ihn", "je", "jae", "mo", "moh", "tak", "kook", "guk", "kuk", "eom",
+    "um", "uhm", "om", "eo", "uh", "eun", "un", "yong", "ye", "bong", "sa", "bu", "boo",
+    "pi", "gam", "kam", "tae", "gal", "kal", "kyung", "gyeong", "kyoung", "bin", "jong",
+    "seung", "si", "shi", "mok", "ji", "jee", "chi", "hwa", "sang", "namgung", "namkoong",
+    "hwangbo", "sunwoo", "seonu", "jegal", "sagong", "seomun", "dokgo", "dongbang",
 }
 
 
@@ -62,8 +81,13 @@ def _east_asian_full_name(last: str, first: str) -> bool:
     return last.lower().rstrip(".") in _KR_SURNAMES  # Park, Juhyeon / Hong, Soram 꼴
 
 
-def _west_author(name: str) -> str:
-    """서양 저자명 → 'Last, F. M.' 형식. 단체·기관명은 그대로 둔다."""
+def _west_author(name: str, keep_full: bool = False) -> str:
+    """서양 저자명 → 'Last, F. M.' 형식. 단체·기관명은 그대로 둔다.
+
+    keep_full=True면 이름을 두문자로 줄이지 않고 'Last, First'로 둔다 — 국문 문헌의
+    영문 변환 항목처럼 저자가 한국인임이 확정된 경우(공통기준 Ⅱ-1)(3): 국내 저자는
+    성명을 그대로).
+    """
     name = name.strip().rstrip(".")
     if not name:
         return name
@@ -76,8 +100,8 @@ def _west_author(name: str) -> str:
         if len(parts) == 1:
             return name
         last, first = parts[-1], " ".join(parts[:-1])
-    if _east_asian_full_name(last, first):
-        return f"{last}, {first}"
+    if keep_full or _east_asian_full_name(last, first):
+        return f"{last}, {first}" if first else last
     initials = " ".join(
         f"{w[0].upper()}." for w in re.split(r"[\s\.\-]+", first) if w and w[0].isalpha()
     )
@@ -96,7 +120,11 @@ def format_authors(entry: dict) -> str:
     roman = all(re.search(r"[A-Za-z]", a) and not re.search(r"[가-힣一-鿿぀-ゟ゠-ヿ]", a)
                 for a in authors)
     if lang == "west" or roman:
-        formatted = [_west_author(a) for a in authors]
+        # 국문 문헌의 영문 변환 항목(소절 표제로 확정)과 국내문헌의 로마자 저자는 한국인이다 —
+        # 성씨 목록에 없어도 두문자로 줄이지 않는다(영문 변환 목록의 이니셜 금지 규칙.
+        # 2026-09-11 실측: 'Cheon, Gyeongrok'이 'Cheon, G.'로 줄던 문제).
+        keep_full = bool(entry.get("is_en_conversion")) or lang == "ko"
+        formatted = [_west_author(a, keep_full=keep_full) for a in authors]
         if len(formatted) == 1:
             s = formatted[0]
         elif len(formatted) == 2:
@@ -110,6 +138,52 @@ def format_authors(entry: dict) -> str:
     if note:
         s += f" {note}"
     return s
+
+
+def normalize_en_line(line: str) -> str:
+    """AI가 만든 영문 변환 한 줄의 저자 연결·법령 구두점을 공통기준에 맞춘다.
+
+    - 2인: 'Kim, Hye Jeong, & Heo, Moah (2021)' → 'Kim, Hye Jeong & Heo, Moah (2021)'
+      (공통기준 Ⅱ-1)(4) 예시 'Hoffer, J. A. & George, J.' — 쉼표는 3인 이상에서만)
+    - 법령: 'Reading Culture Promotion Act, Act No. 21447.' → '…Act. Act No. 21447.'
+      (국문 '법령명. 법률 제N호.'와 같은 꼴)
+    원고 표기를 재활용한 AI 목록이 이 두 가지를 원고 그대로 두던 문제(2026-09-11 실측).
+    """
+    line = (line or "").strip()
+    m = re.match(r"^(.*?)\s\((\d{4}[a-z]?|n\.d\.)\)", line)
+    if m:
+        seg = m.group(1)
+        # 'Last, First, & Last, First' — 쉼표 3개·& 1개면 2인
+        if seg.count("&") == 1 and ", & " in seg and seg.count(",") == 3:
+            line = seg.replace(", & ", " & ") + line[len(seg):]
+    line = re.sub(r",\s*(Act\s+No\.\s*\d+\.?)$", r". \1", line)
+    return line
+
+
+_EN_YEAR_RE = re.compile(r"^(.*?)\s\((\d{4}[a-z]?|n\.d\.)\)")
+
+
+def en_line_sort_key(line: str):
+    """영문 변환 줄의 알파벳순 정렬 키 — 첫 저자 → 나머지 저자 → 연도 → 전체.
+
+    문자열 통째로 비교하면 'Park, Juhyeon & Byun …'(&=0x26)이 'Park, Juhyeon (2016)'((=0x28)보다
+    앞에 와서 공저가 단독 저작보다 앞선다. 첫 저자가 같으면 단독 저작(나머지 저자 없음)이
+    먼저, 그다음 공저자 이름순·연도순. 연도 없는 줄(법령)은 첫 문장(법령명)을 이름 자리에 쓴다.
+    """
+    line = (line or "").strip()
+    m = _EN_YEAR_RE.match(line)
+    if m:
+        seg, year = m.group(1), m.group(2)
+    else:
+        seg, year = line.split(".")[0], ""
+    pieces = [p.strip() for p in re.split(r",\s*&\s*|\s&\s", seg) if p.strip()]
+    if not pieces:
+        return ("", "", year, line.casefold())
+    # 첫 조각 'Han, Cheolwoo, Lee, Kyounghwa'는 '성, 이름' 쌍이 이어진 것 — 두 개씩 묶는다
+    toks = [t.strip() for t in pieces[0].split(",")]
+    first = ", ".join(toks[:2]) if len(toks) >= 2 else toks[0]
+    rest = [", ".join(toks[i:i + 2]) for i in range(2, len(toks), 2)] + pieces[1:]
+    return (first.casefold(), "; ".join(rest).casefold(), year, line.casefold())
 
 
 # ---------------------------------------------------------------- 대소문자
@@ -465,23 +539,31 @@ def _sort_key(e: dict):
     authors = e.get("authors") or []
     if authors:
         name = authors[0]
-        if lang == "west":
-            name = _west_author(name).split(",")[0].lower()
+        # 로마자 저자는 lang 표시와 무관하게 '성, 이름' 정규형을 대소문자 구분 없이 비교한다.
+        # 변환 항목에 AI가 lang=ko를 달면 'Yang, …'(대문자 그대로)와 'american …'(소문자화)이
+        # 섞여 대문자로 시작하는 이름이 전부 앞에 오고, 소문자화된 항목(AASL·법령 2건)이
+        # Yang 뒤로 밀리던 문제(2026-09-11 실측). 같은 성은 이름(두문자)순 → 연도순.
+        if lang == "west" or not _CJK_RE.search(name):
+            name = _west_author(name)
+        name = re.sub(r"\s+", " ", name).casefold()
     else:
-        name = (e.get("title") or "").lower()
+        name = (e.get("title") or "").casefold()
     year = e.get("year", "")
-    ym = re.match(r"(\d{4})", year or "")
+    ym = re.match(r"(\d{4})([a-z]?)", year or "")
     ynum = int(ym.group(1)) if ym else 9999
+    suffix = ym.group(2) if ym else ""   # 같은 저자·연도의 a, b, c는 부기 순서대로
     # 소절 표제로 명시된 '국문 문헌의 영문 변환 표기'는 서양문헌이 아니다 —
     # 국내→서양→동양 원문 뒤에 별도 그룹으로 모아 알파벳순으로 배열한다
     order = 3 if e.get("is_en_conversion") else _LANG_ORDER.get(lang, 0)
-    return (order, name, ynum, (e.get("title") or "").lower())
+    return (order, name, ynum, suffix, (e.get("title") or "").lower())
 
 
 def _author_year_key(e: dict):
     authors = tuple(a.strip() for a in (e.get("authors") or []))
     year = re.sub(r"[a-z]$", "", e.get("year", "") or "")
-    return (authors, year)
+    # 원문 그룹과 영문 변환 그룹은 따로 센다 — 서양문헌에 있는 단체 저자가 변환 목록에도
+    # 실려 있으면(원고 오류) 원문 쪽이 2012a, 변환 쪽이 2012b가 되던 문제(2026-09-11 실측)
+    return (authors, year, bool(e.get("is_en_conversion")))
 
 
 def sort_and_disambiguate(entries: list[dict]) -> list[dict]:

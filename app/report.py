@@ -12,6 +12,8 @@ from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+import formatter
+
 _ACCENT = RGBColor(0x1F, 0x4E, 0x79)
 _WARN = RGBColor(0xB0, 0x3A, 0x2E)
 _OK = RGBColor(0x2E, 0x7D, 0x32)
@@ -434,8 +436,13 @@ def build_result_txt(result: dict) -> str:
     lines = [f"# 참고문헌 표준화 결과 — {result.get('filename', '')}",
              f"# 기준: {result.get('style_name', '')} | 엔진: {result.get('engine_label', '')}", ""]
     cur_group = None
+    eng = result.get("english_list")
     for item in result.get("items", []):
         grp = item.get("group", "")
+        # 영문 변환 목록이 따로 실리면 원고의 변환 항목 그룹은 싣지 않는다 — 같은 목록이
+        # 두 번 나오던 문제(이용자 지적 2026-09-11). HWPX 내보내기와 같은 규칙.
+        if eng and grp == formatter.GROUP_LABEL_CONV:
+            continue
         if grp and grp != cur_group:
             cur_group = grp
             lines.append(f"[{grp}]")
@@ -447,9 +454,8 @@ def build_result_txt(result: dict) -> str:
         for i, tp in tips:
             lines.append(f"[{i}] [{tp.get('label', '')}] {tp.get('rule', '')}"
                          + (f" (예: {tp['example']})" if tp.get("example") else ""))
-    eng = result.get("english_list")
     if eng:
-        lines += ["", "# 영문 변환 목록"]
+        lines += ["", "# 국문 참고문헌 영문 변환 목록 (알파벳순)"]
         lines += eng
     return "\n".join(lines)
 

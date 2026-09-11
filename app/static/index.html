@@ -741,7 +741,7 @@ code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;font-size:1
 // main.py의 APP_VERSION과 반드시 같아야 한다. 서버에 index.html이 덜 복사됐는지
 // 알아내려고 일부러 손으로 박아 두는 값이라 자동 주입하지 않는다.
 // (test_server.py가 두 값이 어긋나면 실패시킨다)
-const UI_VERSION='2026.09.08-06';
+const UI_VERSION='2026.09.11-01';
 const $=id=>document.getElementById(id);
 let pickedFiles=[], styles=[], currentJob=null, pollTimer=null, etaTimer=null, pollFails=0, poll404=0;
 
@@ -1570,7 +1570,8 @@ function fileBodyHtml(job,idx,viewHid){
     if(viewHid){
       h+=`<div class="row" style="margin-bottom:10px">
         <button class="btn small" onclick="location='/api/results/${viewHid}/download?fmt=docx'">결과 DOCX</button>
-        <button class="btn small" onclick="location='/api/results/${viewHid}/download?fmt=hwpx'" title="내어쓰기가 적용된 최종 목록을 한글(HWPX) 문서로 받습니다">한글 HWPX</button>
+        <button class="btn small" onclick="location='/api/results/${viewHid}/download?fmt=hwpx'" title="내어쓰기가 적용된 최종 목록을 한글(HWPX) 문서로 받습니다 — 올린 원고와 달라진 부분은 빨간색으로 표시됩니다">한글 HWPX</button>
+        <button class="btn ghost small" onclick="location='/api/results/${viewHid}/download?fmt=hwpx&marks=0'" title="빨간색 변경 표시 없이 검정 글자로만 된 HWPX — 원고에 그대로 옮겨 붙일 때">HWPX(표시 없음)</button>
         <button class="btn ghost small" onclick="location='/api/results/${viewHid}/download?fmt=txt'">TXT</button>
         <button class="btn ghost small" onclick="location='/api/results/${viewHid}/download?fmt=ris'">RIS (EndNote·Zotero)</button>
         <button class="btn ghost small" onclick="location='/api/results/${viewHid}/download?fmt=bib'">BibTeX</button>
@@ -1581,7 +1582,8 @@ function fileBodyHtml(job,idx,viewHid){
     } else if(job.mode==='upload'){
       h+=`<div class="row" style="margin-bottom:10px">
         <button class="btn small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=docx'">결과 DOCX</button>
-        <button class="btn small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=hwpx'" title="내어쓰기가 적용된 최종 목록을 한글(HWPX) 문서로 받습니다">한글 HWPX</button>
+        <button class="btn small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=hwpx'" title="내어쓰기가 적용된 최종 목록을 한글(HWPX) 문서로 받습니다 — 올린 원고와 달라진 부분은 빨간색으로 표시됩니다">한글 HWPX</button>
+        <button class="btn ghost small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=hwpx&marks=0'" title="빨간색 변경 표시 없이 검정 글자로만 된 HWPX — 원고에 그대로 옮겨 붙일 때">HWPX(표시 없음)</button>
         <button class="btn ghost small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=txt'">TXT</button>
         <button class="btn ghost small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=ris'">RIS (EndNote·Zotero)</button>
         <button class="btn ghost small" onclick="location='/api/jobs/${job.id}/download/${idx}?fmt=bib'">BibTeX</button>
@@ -1792,7 +1794,7 @@ function renderResults(job,opts){
     <span style="flex:1"></span><span class="hint">${esc(res.style_name||'')} · ${esc(res.engine_label||'')}</span></div>
     <div class="body"></div>`;
   div.querySelector('.head').onclick=()=>div.classList.toggle('open');
-  div.querySelector('.body').innerHTML=fileBodyHtml(job,0);
+  div.querySelector('.body').innerHTML=fileBodyHtml(job,0,job.view_hid);
   root.appendChild(div);
   applyRefFilter(0);  // 재렌더(재조회 등) 후에도 켜 둔 필터를 유지한다
   // 재조회 등 제자리 갱신에서는 스크롤을 건드리지 않는다 — 보던 항목을 잃지 않도록
@@ -2046,34 +2048,38 @@ async function openPastView(hid){
   if(!r.ok){ $('pastView').innerHTML='<div class="errbox">열람 권한이 없거나 결과를 찾을 수 없습니다.</div>'; return; }
   const d=await r.json();
   window._viewRes=d.result;
-  const pseudo={id:'',mode:'view',results:[d.result]};
-  // idx는 'P'로 구분 — 본화면 결과(idx 0)와 대화상자가 동시에 떠 있어도 id가 겹치지 않게
-  $('pastView').innerHTML=`<hr style="border:none;border-top:1px solid var(--line);margin:6px 0 10px">
-    <div class="row" style="margin:4px 0 10px"><b>📄 ${esc(d.result.filename)}</b>${fileChips(d.result,'P')}
-    <span style="flex:1"></span><span class="hint">${esc(d.meta.time)} · ${esc(d.meta.user||'익명')}(${esc(d.meta.org||'-')})</span></div>`
-    +fileBodyHtml(pseudo,'P',hid);
-  window._refFilter=window._refFilter||{}; window._refFilter['P']='';  // 이전 열람의 필터를 물려받지 않는다
-  applyRefFilter('P');
-  $('pastView').scrollIntoView({behavior:'smooth',block:'nearest'});
+  // 처음 분석했을 때와 같은 화면(4. 처리 결과 카드)에 그대로 그린다 — 대화상자 안에
+  // 작게 보여 주면 내려받기 버튼·대비표를 찾기 어려웠다(이용자 요청 2026-09-11).
+  // view_hid가 있으면 내려받기는 저장된 결과(/api/results/…)에서 받는다.
+  $('pastView').innerHTML='';
+  dlgPast.close();
+  window._tabsBuilt=false; window._openTab=0; window._renderedTab=-1;
+  window._refFilter=window._refFilter||{}; window._refFilter[0]='';  // 이전 결과의 필터를 물려받지 않는다
+  const job={id:'',mode:'view',results:[d.result],view_hid:hid};
+  renderResults(job);
+  $('outDirNote').textContent=`📂 지난 결과 열람 — ${d.meta.time} 처리 · ${d.meta.user||'익명'}(${d.meta.org||'-'}) · 처리 당시 저장된 결과이며 내려받기도 이 결과 기준입니다.`;
 }
-function copyView(){
-  const res=window._viewRes; if(!res) return;
+// 최종 목록 문자열 — HWPX·TXT 내보내기와 같은 규칙: 영문 변환 목록이 따로 있으면
+// 원고의 변환 항목 그룹은 빼고(같은 목록이 두 번 나오던 문제) 변환 목록을 끝에 한 번 싣는다
+function finalListText(res){
+  const eng=res.english_list||[];
   let g=null,lines=[];
   for(const it of res.items){
+    if(eng.length&&it.group==='국문 문헌의 영문 변환 표기') continue;
     if(it.group&&it.group!==g){g=it.group;lines.push('['+g+']');}
     lines.push(it.formatted);
   }
-  navigator.clipboard.writeText(lines.join('\n')).then(()=>alert('최종 목록이 클립보드에 복사되었습니다.'));
+  if(eng.length){ lines.push('[국문 참고문헌 영문 변환 목록]'); lines.push(...eng); }
+  return lines.join('\n');
+}
+function copyView(){
+  const res=window._viewRes; if(!res) return;
+  navigator.clipboard.writeText(finalListText(res)).then(()=>alert('최종 목록이 클립보드에 복사되었습니다.'));
 }
 
 function copyList(idx){
   const res=window._lastJob.results[idx];
-  let g=null,lines=[];
-  for(const it of res.items){
-    if(it.group&&it.group!==g){g=it.group;lines.push('['+g+']');}
-    lines.push(it.formatted);
-  }
-  navigator.clipboard.writeText(lines.join('\n')).then(()=>alert('최종 목록이 클립보드에 복사되었습니다.'));
+  navigator.clipboard.writeText(finalListText(res)).then(()=>alert('최종 목록이 클립보드에 복사되었습니다.'));
 }
 function downloadZip(){ location='/api/jobs/'+currentJob+'/download_zip'; }
 
