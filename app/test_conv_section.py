@@ -311,4 +311,41 @@ e_iss = dict(e_vol, issue="3")
 m2 = verify._meta_kr_for_entry(e_iss, kci)
 ok(m2["issue"] == "170" and m2["volume"] == "", "원고가 호를 적었으면 KCI 값 그대로 대조")
 
+# ---------------------------------------------------------------- 9) 부제 소문자·카카오 책 (2026.09.18-01)
+print("[9] 콜론 뒤 부제 첫 낱말 소문자 — 학회 오류유형 안내 1.2·공통기준 Wilson 예시")
+sc = formatter.sentence_case
+ok(sc("Why school librarians matter: What years of research tell us")
+   == "Why school librarians matter: what years of research tell us", "APA식 'What' → 'what'(원고가 이미 문장식이어도)")
+ok(sc("Digital Library Research: Current Developments And Trends")
+   == "Digital library research: current developments and trends", "Title Case 원고 → 부제까지 소문자")
+ok(sc("School libraries: SNS use in Korea") == "School libraries: SNS use in Korea", "콜론 뒤 약어(SNS)는 유지")
+ok(sc("Who cares? A study of libraries") == "Who cares? A study of libraries", "물음표 뒤는 새 문장 — 대문자 유지")
+ok(sc("Time series: iPhone use") == "Time series: iPhone use", "내부 대문자(iPhone) 유지")
+
+print("[9] 카카오 책 검색 — 레코드 변환·판 선택·저자 불일치 (응답은 가짜, 네트워크 없음)")
+import verify_kr
+_docs = [{"title": "디지털도서관 운영론", "authors": ["이수상"], "publisher": "한국도서관협회",
+          "datetime": "2026-02-01T00:00:00.000+09:00", "isbn": "8976781147 9788976781147", "url": "https://search.daum.net/x"},
+         {"title": "디지털도서관 운영론", "authors": ["이수상"], "publisher": "한국도서관협회",
+          "datetime": "2008-08-25T00:00:00.000+09:00", "isbn": "9788976780000", "url": "https://search.daum.net/y"}]
+_orig_docs, _orig_env = verify_kr._kakao_docs, verify_kr.env_get
+verify_kr._kakao_docs = lambda client, params: list(_docs)
+verify_kr.env_get = lambda k: "test-key" if k == "KAKAO_REST_API_KEY" else _orig_env(k)
+try:
+    r = verify_kr.kakao_book_search(None, "디지털도서관운영론", "이수상", "2008")
+    ok(r and r["source"] == "카카오 책" and r["year"] == "2008" and r["isbn"] == "9788976780000",
+       "같은 서명의 판이 둘이면 원고 연도(2008)와 맞는 판을 고름")
+    ok(r["url"] == "https://search.daum.net/y" and r["publisher"] == "한국도서관협회", "Daum 책 링크·출판사 전달")
+    r2 = verify_kr.kakao_book_search(None, "디지털도서관운영론", "홍길동", "2008")
+    ok(r2 and r2.get("author_mismatch"), "저자가 다르면 author_mismatch — 동명 서명을 '확인'하지 않음")
+    ok(verify_kr.kakao_book_search(None, "전혀 다른 책 제목입니다", "", "") is None, "유사도 0.80 미만이면 None")
+    r3 = verify_kr.kakao_book_by_isbn(None, "978-89-7678-1147")
+    ok(r3 and r3["isbn"] == "9788976781147" and r3["sim"] == 1.0, "ISBN 조회 — 'ISBN10 ISBN13' 중 13자리를 취함")
+    ok(verify_kr.kr_api_status()["kakao"] is True, "kr_api_status에 kakao 상태")
+    r4 = verify_kr.kakao_book_search(None, "디지털도서관운영론", "이수상", "2003")
+    ok(r4 and r4["year"] == "" and r4["publisher"] == "" and "2026년판만 수록" in r4["note"] or "2008년판만 수록" in r4["note"],
+       "원고 연도의 판이 없으면 실존만 확인 — 연도·출판사 비워 다른 판으로 교정 제안하지 않음")
+finally:
+    verify_kr._kakao_docs, verify_kr.env_get = _orig_docs, _orig_env
+
 print(f"\n전체 {_PASS}건 통과")

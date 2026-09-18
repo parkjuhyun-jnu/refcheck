@@ -8,7 +8,8 @@
 - KCI·RISS·국립중앙도서관·국회도서관(verify_kr): 국내 문헌 검증(키 설정 시)
   · 학술지 논문: KCI → (적중 시 RISS 교차 확인) / 미적중 시 RISS → Crossref 폴백
   · 학위논문: RISS(국내·해외) → 국회도서관 폴백
-  · 단행본·보고서: 국립중앙도서관 → 국회도서관 → RISS 폴백
+  · 단행본: 국립중앙도서관 → 카카오 책 → 국회도서관 → RISS 폴백 (보고서는 카카오 제외)
+  · 해외 단행본: 카카오 책(국내 유통본) — 없으면 오프라인 자료로 생략
 - URL 생존 확인
 
 결과 dict:
@@ -936,6 +937,11 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
         elif etype in ("book", "report"):
             kr, e_k = _safe(verify_kr.nlk_book_search, client, title, first_author, year)
             lookup_err |= e_k
+            if not kr and etype == "book":
+                # 시판 도서(해외서 포함)는 카카오 책(Daum 책)이 SEOJI 누락을 메운다 —
+                # 전남대 도서관 외부기관검색과 같은 구성(kakao책·RISS·국립중앙·국회)
+                kr, e_kk = _safe(verify_kr.kakao_book_search, client, title, first_author, year)
+                lookup_err |= e_kk
             if not kr:
                 kr, e_k2 = _safe(verify_kr.nanet_search, client, title, year)
                 lookup_err |= e_k2
@@ -964,6 +970,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             if kr.get("isbn"):
                 # 같은 서명의 다른 판과 헷갈릴 때 이용자가 손으로 확인할 수 있는 유일한 값
                 detail += f" · ISBN {kr['isbn']}"
+            if kr.get("note"):
+                detail += f" · {kr['note']}"   # 카카오 책: 다른 판만 수록 등 판정 단서
             if xref:
                 detail += (" · RISS 교차 확인 일치" if xref["state"] == "agree" else
                            " · RISS 교차 확인: 서지 상이(" + ", ".join(xref["diff"])
@@ -1003,7 +1011,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
         # 실제로 대조한 정보원만 문구에 적는다 — 키가 없는 DB를 '찾아봤다'고 하지 않는다
         tried = {"journal": [("KCI", st["kci"]), ("RISS", st["riss"])],
                  "thesis": [("RISS", st["riss"]), ("국회도서관", st["nanet"])],
-                 "book": [("국립중앙도서관", st["nlk"]), ("국회도서관", st["nanet"]), ("RISS", st["riss"])],
+                 "book": [("국립중앙도서관", st["nlk"]), ("카카오 책", st["kakao"]),
+                          ("국회도서관", st["nanet"]), ("RISS", st["riss"])],
                  "report": [("국립중앙도서관", st["nlk"]), ("국회도서관", st["nanet"]), ("RISS", st["riss"])],
                  }.get(etype, [])
         used = [name for name, on in tried if on]
@@ -1205,6 +1214,27 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                           detail="국가법령정보센터에서 같은 이름의 법령을 찾지 못함 — 약칭·옛 명칭이면 "
                                  "정식 명칭으로(예: 학교도서관법 → 학교도서관진흥법), 시행령·시행규칙은 "
                                  "그 이름까지 적었는지 확인")
+        return result
+
+    # ---- 3-b) 해외 단행본: 카카오 책(국내 유통 해외서) — 지금까지는 '오프라인 자료'로 전부
+    #      생략했다. 수록이 부분적이라 못 찾아도 '미발견'이 아니라 생략(skipped)으로 둔다.
+    if etype == "book" and verify_kr.kr_api_status().get("kakao"):
+        kr, e_kk = _safe(verify_kr.kakao_book_search, client, entry.get("title", ""),
+                         (entry.get("authors") or [""])[0], entry.get("year", ""))
+        lookup_err |= e_kk
+        if kr and not kr.get("author_mismatch"):
+            detail = f"카카오 책 대조 성공(제목 일치 {kr.get('sim', 0):.0%})"
+            if kr.get("isbn"):
+                detail += f" · ISBN {kr['isbn']}"
+            if kr.get("note"):
+                detail += f" · {kr['note']}"
+            result.update(status="verified", source="카카오 책", detail=detail, meta=_meta_from_kr(kr))
+            return result
+        result.update(detail="검증 대상 아님(오프라인 자료) — 카카오 책(국내 유통 해외서)에서도 찾지 못함"
+                             if not lookup_err else "검증 대상 아님(오프라인 자료) — 카카오 책 조회 실패")
+        if kr and kr.get("author_mismatch"):
+            who = ", ".join(kr.get("authors") or [])[:60]
+            result["detail"] += f" · 같은 제목의 다른 저자 도서만 있음({who})"
         return result
 
     # ---- 4) URL만 있는 자료

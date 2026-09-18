@@ -179,6 +179,9 @@ def _kr_verify_result(kr: dict, detail_prefix: str) -> dict:
          "meta": verify_mod._meta_from_kr(kr)}
     if kr.get("isbn"):
         r["detail"] += f" · ISBN {kr['isbn']}"
+    if kr.get("source") == "카카오 책" and any(not verify_kr._HANGUL_RE.search(a) for a in kr.get("authors") or []):
+        # 서점 등록 저자명은 성·이름 순서가 일정하지 않다(실측 'Caplan Priscilla' / 'Richard E Rubin')
+        r["detail"] += " · 해외 저자명은 서점 등록 표기라 성·이름 순서를 확인해 주세요"
     return r
 
 
@@ -263,15 +266,19 @@ def quick_lookup(q: str) -> dict:
                 v = verify_mod.verify_entry(client, entry)
             elif kind == "isbn":
                 kr = verify_kr.nlk_book_by_isbn(client, val)
+                if not kr:
+                    # 국립중앙도서관에 없는 해외서·구간은 카카오 책(Daum 책)으로 한 번 더
+                    kr = verify_kr.kakao_book_by_isbn(client, val)
                 if kr:
                     entry.update(type="book", lang="ko")
-                    v = _kr_verify_result(kr, "ISBN 대조 성공(국립중앙도서관)")
+                    v = _kr_verify_result(kr, f"ISBN 대조 성공({kr.get('source', '국립중앙도서관')})")
                 else:
                     st = verify_kr.kr_api_status()
-                    v = {"status": "not_found" if st["nlk"] else "skipped",
-                         "detail": ("국립중앙도서관 서지에서 해당 ISBN을 찾지 못함 — "
-                                    "해외서·ISBN 없는 자료는 수록되지 않습니다"
-                                    if st["nlk"] else
+                    v = {"status": "not_found" if (st["nlk"] or st["kakao"]) else "skipped",
+                         "detail": ("국립중앙도서관" + ("·카카오 책" if st["kakao"] else "")
+                                    + " 서지에서 해당 ISBN을 찾지 못함 — "
+                                    "해외서·ISBN 없는 자료는 수록되지 않을 수 있습니다"
+                                    if (st["nlk"] or st["kakao"]) else
                                     "국내 DB 검증용 API 키 미설정 — ISBN 조회를 할 수 없습니다"),
                          "source": "", "found_doi": "", "retraction": None,
                          "journal": None, "preprint": None, "meta": None}
@@ -338,9 +345,9 @@ def verify_with_identifier(entry: dict, identifier: str) -> tuple[dict | None, s
                     return v, ""
                 return None, v.get("detail") or "해당 DOI를 찾지 못했습니다."
             if kind == "isbn":
-                kr = verify_kr.nlk_book_by_isbn(client, val)
+                kr = verify_kr.nlk_book_by_isbn(client, val) or verify_kr.kakao_book_by_isbn(client, val)
                 if kr:
-                    v = _kr_verify_result(kr, "ISBN 대조 성공(국립중앙도서관)")
+                    v = _kr_verify_result(kr, f"ISBN 대조 성공({kr.get('source', '국립중앙도서관')})")
                     # DOI 경로처럼 제목을 대조한다 — 무관한 도서의 ISBN을 넣어도
                     # 경고 없이 '실존 확인'이 되면 잘못된 연도 교정까지 제안하게 된다
                     title = (entry.get("title") or "").strip()

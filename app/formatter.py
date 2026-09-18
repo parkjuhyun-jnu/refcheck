@@ -261,10 +261,21 @@ def sentence_case(s: str) -> str:
             else:
                 out.append(w.lower())
         s = " ".join(out)
-        # 부제 경계(콜론·물음표·느낌표) 뒤 첫 글자는 대문자
-        s = re.sub(r"([:?!]\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
+        # 물음표·느낌표 뒤는 새 문장이므로 대문자. 콜론 뒤 부제는 아래에서 소문자로 통일
+        s = re.sub(r"([?!]\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
     else:
         s = s[0].upper() + s[1:] if s[0].isalpha() else s
+    # 콜론 뒤 부제의 첫 낱말은 소문자 — 학회 오류유형 안내 1.2 '콜론(:) 뒤에 이어지는 부제를
+    # 포함한 나머지 단어는 소문자로 유지'(예: A study on digital libraries: user behavior analysis),
+    # 공통기준 6) 예시 'Recent trends in user studies: action research and …'도 같다.
+    # APA는 콜론 뒤를 대문자로 쓰므로 원고가 'Why school librarians matter: What years …'처럼
+    # 와도 낮춘다(이용자 지적 2026-09-18). 약어(SNS)·내부 대문자(iPhone)·인명 이니셜(J.)은 둔다.
+    def _lower_sub(m):
+        w = m.group(2)
+        if w.isupper() or any(c.isupper() for c in w[1:]) or w.endswith("."):
+            return m.group(0)
+        return m.group(1) + w[0].lower() + w[1:]
+    s = re.sub(r"(:\s+)([A-Z][A-Za-z'’\-]*\.?)", _lower_sub, s)
     return s
 
 

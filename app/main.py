@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.11-03"
+APP_VERSION = "2026.09.18-01"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -697,6 +697,10 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
                 continue  # 아티클 번호가 면수를 대신하는 학술지 — 원고에 이미 있으므로 제안 불필요
         if f == "publisher" and cur and _norm_publisher(cur) == _norm_publisher(new):
             continue
+        if f == "publisher" and cur and meta.get("source") == "카카오 책":
+            # 서점 DB의 출판사 표기는 전거가 아니다('ALA Neal-Schuman' ↔ 'Neal-Schuman Publishers',
+            # 'ALA' ↔ 'American Library Association') — 원고에 출판사가 있으면 바꾸라 하지 않는다
+            continue
         out.append({"field": f, "label": label, "current": cur or "(없음)",
                     "suggested": new, "source": meta.get("source", "")})
     return out
@@ -1002,9 +1006,9 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     if options.get("verify"):
         # 가장 오래 걸리는 구간 — 몇 건째 조회 중인지 실시간으로 알린다
         def _verify_progress(done: int, total: int):
-            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 12개 정보원, {done}/{total}건 조회)", filename)
+            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 13개 정보원, {done}/{total}건 조회)", filename)
 
-        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 12개 정보원, {len(entries)}건)", filename)
+        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 13개 정보원, {len(entries)}건)", filename)
         verify_results = verify_mod.verify_entries(entries, progress_cb=_verify_progress)
         for i, (e, v) in enumerate(zip(entries, verify_results)):
             if v.get("status") != "verified":
@@ -2236,6 +2240,9 @@ def get_sources():
              "state": "on" if kr.get("riss") else "link"},
             {"name": "국립중앙도서관 서지정보(SEOJI)", "role": "국내 단행본 ISBN·서지 대조(1순위)",
              "state": "on" if kr.get("nlk") else "off"},
+            {"name": "카카오 책 검색 (Daum 책)",
+             "role": "국내 단행본 폴백 대조(국립중앙도서관에 없을 때)·해외 단행본 실존 확인(국내 유통본)·ISBN 조회",
+             "state": "on" if kr.get("kakao") else "off"},
             {"name": "국회도서관 국가학술정보", "role": "학위논문·단행본 폴백 대조",
              "state": "on" if kr.get("nanet") else "off"},
             {"name": "국가법령정보센터 (법제처)",
@@ -2255,9 +2262,9 @@ def get_sources():
         ],
         "note": ("국내 학술지 논문은 KCI를 전거로 대조한 뒤 RISS로 한 번 더 교차 확인합니다"
                  "(KCI 미등재지는 RISS → Crossref 순). 학위논문은 RISS(국내·해외) → 국회도서관, "
-                 "단행본·보고서는 국립중앙도서관 → 국회도서관 → RISS 순으로 대조합니다. "
+                 "단행본은 국립중앙도서관 → 카카오 책 → 국회도서관 → RISS, 보고서는 국립중앙도서관 → 국회도서관 → RISS 순으로 대조합니다. "
                  "법령은 국가법령정보센터에서 현행 공포번호와 영문 법령명을 확인합니다. "
-                 "해외 문헌은 Crossref를 시작으로 OpenAlex·Semantic Scholar·ERIC 순서로 대조하고, "
+                 "해외 문헌은 Crossref를 시작으로 OpenAlex·Semantic Scholar·ERIC 순서로 대조하고(해외 단행본은 카카오 책), "
                  "국내 논문의 영문 인용은 KCI·RISS의 공식 영문 제목으로도 대조하며, 국내 문헌이라도 "
                  "DOI가 있으면 해외 정보원에서 함께 확인합니다. 그래도 확인되지 않은 항목에는 "
                  "RISS 검색 링크가 붙습니다."),

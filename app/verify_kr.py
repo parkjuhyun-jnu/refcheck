@@ -64,6 +64,8 @@ def kr_api_status() -> dict:
         "kci": bool(env_get("KCI_API_KEY")),
         "nlk": bool(env_get("NLK_CERT_KEY")),
         "nanet": bool(env_get("NANET_API_KEY")),
+        # 카카오 책 검색(Daum 책) — 시판 도서·해외서 폴백. developers.kakao.com REST API 키
+        "kakao": bool(env_get("KAKAO_REST_API_KEY")),
         # 인증 오류가 확정된 뒤에는 False — 판정 문구가 'RISS까지 대조했다'고 주장하지 않게
         "riss": riss_enabled(),
         # 국가법령정보센터는 키 없이도 조회된다(활용 안내서의 예시 OC) — 자기 OC를 두면 그것을 쓴다
@@ -603,6 +605,108 @@ def nlk_book_search(client: httpx.Client, title: str, author: str = "",
             best["sim"] = best_sim
             return best
     return None
+
+
+# ---------------------------------------------------------------- 카카오 책 검색(Daum 책)
+
+_KAKAO_URL = "https://dapi.kakao.com/v3/search/book"
+
+
+def _kakao_docs(client: httpx.Client, params: dict) -> list[dict] | None:
+    """카카오 책 검색 GET — 키 없음·4xx는 None(자료 없음), 네트워크·5xx는 LookupUnavailable.
+
+    전남대 도서관 '외부기관검색(Open-API)'이 kakao책·RISS·국립중앙도서관·국회도서관을 함께
+    보는 것을 보고 도입(2026-09-18). 국립중앙도서관 SEOJI가 ISBN 없는 자료·해외서를 빠뜨리는
+    구멍을 시판 도서 DB로 메운다. 인증은 헤더 'Authorization: KakaoAK {REST API 키}'.
+    """
+    key = env_get("KAKAO_REST_API_KEY").strip()
+    if not key:
+        return None
+    r = http_util.get_with_retry(client, _KAKAO_URL, params=params,
+                                 headers={"Authorization": f"KakaoAK {key}"}, timeout=_TIMEOUT)
+    if r.status_code == 401:
+        _log("카카오 책 검색 인증 오류(401) — KAKAO_REST_API_KEY 확인 필요")
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        docs = r.json().get("documents") or []
+    except ValueError:
+        return None
+    return docs if isinstance(docs, list) else []
+
+
+def _kakao_record(d: dict) -> dict:
+    """카카오 책 문서 → 국내 DB 공통 레코드. isbn은 'ISBN10 ISBN13'이 공백으로 붙어 온다."""
+    isbns = [x for x in (d.get("isbn") or "").split() if x]
+    isbn13 = next((x for x in isbns if len(x) == 13), isbns[0] if isbns else "")
+    return {
+        "title": (d.get("title") or "").strip(),
+        "authors": [a for a in (d.get("authors") or []) if a],
+        "publisher": (d.get("publisher") or "").strip(),
+        "year": (d.get("datetime") or "")[:4],
+        "isbn": isbn13,
+        "url": d.get("url") or "",          # Daum 책 상세 페이지 — 화면의 근거 링크
+        "source": "카카오 책",
+    }
+
+
+def kakao_book_by_isbn(client: httpx.Client, isbn: str) -> dict | None:
+    """카카오 책 ISBN 직접 조회 — 국립중앙도서관 ISBN 조회의 폴백(단건 검증·재조회)."""
+    isbn = re.sub(r"[^0-9Xx]", "", isbn or "")
+    if len(isbn) not in (10, 13):
+        return None
+    docs = _kakao_docs(client, {"query": isbn, "target": "isbn", "size": 5})
+    if not docs:
+        return None
+    rec = _kakao_record(docs[0])
+    rec["sim"] = 1.0
+    return rec
+
+
+def kakao_book_search(client: httpx.Client, title: str, author: str = "",
+                      year: str = "") -> dict | None:
+    """카카오 책 제목 검색 — 국립중앙도서관에 없는 단행본(해외서·구간·기관 발간물 일부) 폴백.
+
+    판정은 nlk_book_search와 같다: 제목 유사도 0.80 이상, 같은 서명의 판이 여럿이면 원고
+    연도와 맞는 판 우선. 저자가 레코드와 어긋나면 author_mismatch로 돌려 동명 서명의 다른
+    책을 '확인'하지 않게 한다(RISS와 같은 규칙).
+    """
+    if not env_get("KAKAO_REST_API_KEY").strip() or not title or len(title) < 3:
+        return None
+    want_year = re.sub(r"\D", "", year or "")[:4]
+    q_main = _nlk_main_title(title)
+    use_main = len(_norm(q_main)) >= 6
+
+    best, best_key = None, (0.0, 0)
+    for q in _nlk_queries(title):
+        docs = _kakao_docs(client, {"query": q[:80], "target": "title", "size": 20})
+        if docs is None:
+            return None
+        for d in docs:
+            raw = (d.get("title") or "").strip()
+            sim = _sim(title, raw)
+            if use_main:
+                sim = max(sim, _sim(q_main, _nlk_main_title(raw)))
+            d_year = (d.get("datetime") or "")[:4]
+            key = (round(sim, 3), 1 if want_year and d_year == want_year else 0)
+            if key > best_key:
+                best_key, best = key, d
+        if best is not None and best_key[0] >= 0.80:
+            break
+    if best is None or best_key[0] < 0.80:
+        return None
+    rec = _kakao_record(best)
+    rec["sim"] = best_key[0]
+    if not _author_match(author, rec["authors"]):
+        rec["author_mismatch"] = True
+    if want_year and rec["year"] and rec["year"] != want_year:
+        # 시판 도서 DB라 현재 판만 실린 경우가 많다(실측: Caplan 2003 → 2021년판만, Rubin 2016 →
+        # 2020년판만). 다른 판의 연도·출판사·ISBN으로 원고를 '교정'하게 두지 않는다 — 실존만
+        # 확인하고 판별 서지는 비운다.
+        rec["note"] = f"카카오 책에는 {rec['year']}년판만 수록 — 원고 연도({want_year})·출판사는 대조하지 않음"
+        rec["year"] = rec["publisher"] = rec["isbn"] = ""
+    return rec
 
 
 # ---------------------------------------------------------------- 국회도서관(학위논문 등)
