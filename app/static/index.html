@@ -749,7 +749,7 @@ code{background:var(--accent-soft);padding:1px 6px;border-radius:5px;font-size:1
 // main.py의 APP_VERSION과 반드시 같아야 한다. 서버에 index.html이 덜 복사됐는지
 // 알아내려고 일부러 손으로 박아 두는 값이라 자동 주입하지 않는다.
 // (test_server.py가 두 값이 어긋나면 실패시킨다)
-const UI_VERSION='2026.09.18-01';
+const UI_VERSION='2026.09.18-02';
 const $=id=>document.getElementById(id);
 let pickedFiles=[], styles=[], currentJob=null, pollTimer=null, etaTimer=null, pollFails=0, poll404=0;
 
@@ -1811,16 +1811,28 @@ function fileBodyHtml(job,idx,viewHid){
       if(cc.cited_not_listed.length){
         h+='<div><b style="color:var(--warn)">본문에 인용됐지만 목록에 없음</b>';
         for(const c of cc.cited_not_listed)
-          h+=`<div class="issue">· ${esc(c.name)}(${esc(c.year)}) — “…${esc(c.snippet)}…”${c.name_only_match?' <span class="hint">(같은 저자 다른 연도는 목록에 있음 — 연도 확인)</span>':''}</div>`;
+          h+=`<div class="issue">· ${esc(c.name)}${c.year?'('+esc(c.year)+')':''} — “…${esc(c.snippet)}…”`
+            +(c.name_only_match?' <span class="hint">(같은 저자 다른 연도는 목록에 있음 — 연도 확인)</span>':'')
+            +(c.note?` <span class="hint">(${esc(c.note)})</span>`:'')
+            // 같은 해에 인용이 없는 목록 항목 — 이름 표기만 다른 같은 문헌일 수 있다
+            +((c.candidates||[]).length?` <span class="hint">— 같은 해 미인용 항목: ${c.candidates.map(esc).join(' / ')} (같은 문헌이면 인용 표기를 목록의 저자명에 맞추세요)</span>`:'')
+            +'</div>';
         h+='</div>';
       }
       if(cc.listed_not_cited.length){
         h+='<div style="margin-top:6px"><b style="color:var(--amber)">목록에 있지만 본문 인용을 찾지 못함</b>';
         for(const c of cc.listed_not_cited)
+          h+=`<div class="issue" style="color:var(--amber)">· ${esc(c.authors||'')} (${esc(c.year)}) — ${esc(c.raw)}${c.note?` <span class="hint">(${esc(c.note)})</span>`:''}</div>`;
+        h+='</div>';
+      }
+      // 원고가 병기한 영문 변환 목록에서 짝을 못 찾은 국문 문헌 — 편집위원회가 손으로 잡던 누락(2026-09-18)
+      if((cc.conversion_missing||[]).length){
+        h+='<div style="margin-top:6px"><b style="color:var(--amber)">국문 목록에 있지만 원고의 영문 변환 목록에서 짝을 찾지 못함</b> <span class="hint">(변환이 빠졌으면 아래 영문 변환 목록의 해당 항목을 가져다 쓰세요)</span>';
+        for(const c of cc.conversion_missing)
           h+=`<div class="issue" style="color:var(--amber)">· ${esc(c.authors||'')} (${esc(c.year)}) — ${esc(c.raw)}</div>`;
         h+='</div>';
       }
-      if(!cc.cited_not_listed.length&&!cc.listed_not_cited.length)
+      if(!cc.cited_not_listed.length&&!cc.listed_not_cited.length&&!(cc.conversion_missing||[]).length)
         h+='<div class="chip ok" style="display:inline-block">이상 없음 — 본문 인용과 목록이 일치합니다</div>';
     }
 

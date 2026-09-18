@@ -231,8 +231,11 @@ def _split_author_title(text: str, e: dict):
         r"\((" + _YEAR + r"[a-z]?|" + _YEAR + r"/" + _YEAR + r"|" + _YEAR + r"[\.,][^)]*|발행년불명|n\.d\.)\)",
         text)
 
-    # A) 표준형: 저자 (연도). 나머지
-    if year_paren and year_paren.start() <= 70:
+    # A) 표준형: 저자 (연도). 나머지 — 70자 안에 연도 괄호가 있거나, 그보다 길어도 앞부분이
+    #    저자 나열('Wine, L. D., Pribesh, S., Kimmel, S. C., Dickinson, G., & Church, A. P.' 78자)이면.
+    #    5인 이상 서양 저자가 70자 제한에 걸려 'Wine, L. (2023). D., Pribesh…'로 깨지던 문제(2026-09-18 실측)
+    if year_paren and (year_paren.start() <= 70 or
+                       (year_paren.start() <= 220 and _looks_like_author_list(text[: year_paren.start()]))):
         before = text[: year_paren.start()].strip().rstrip(".,")
         after = text[year_paren.end():].strip().lstrip(".,").strip()
         if before:
@@ -266,6 +269,16 @@ def _split_author_title(text: str, e: dict):
     e["notes"].append("저자·연도 구분 확인 필요")
     e["title"] = text.strip().rstrip(".")
     e["_rest"] = ""
+
+
+_AUTHOR_LIST_WEST = re.compile(
+    r"^(?:[A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)*,\s*(?:[A-Z]\.\s*|[A-Z][a-z]+\s*|[A-Z][A-Za-z\-]+\s*)+,?\s*(?:&\s*|and\s*)?)+$")
+_AUTHOR_LIST_KO = re.compile(r"^[가-힣]{2,5}(?:\s*[,·․]\s*[가-힣]{2,5})+\s*$")
+
+
+def _looks_like_author_list(s: str) -> bool:
+    s = s.strip().rstrip(",")          # 마지막 이니셜의 마침표('A. P.')는 남긴다
+    return bool(_AUTHOR_LIST_WEST.match(s + " ") or _AUTHOR_LIST_KO.match(s.rstrip(".")))
 
 
 def _assign_authors(before: str, e: dict):
@@ -401,9 +414,12 @@ def _fill_fields(e: dict):
             e["notes"].append("권·호·면수 확인 필요")
 
     elif t == "book":
+        # 출판지는 마침표를 품지 않고 서명 뒤 문장 경계 다음에 온다 — 옛 패턴은 출판지 자리에
+        # 마침표를 허용해 'Multidimensional Reading Abili|ty Diagnostic Test. Seoul'처럼 서명을
+        # 아무 데서나 잘랐다(2026-09-18 실측: 국문 12인 저자 단행본은 서명이 '다'로).
         m = re.match(
-            r"(?P<title>.+?)[\.\?]?\s*(?:\((?P<ed>[^)]*(?:판|ed\.)[^)]*)\))?\s*[\.]?\s*"
-            r"(?P<place>[가-힣A-Za-z\.\s]{1,25}?)\s*[::]\s*(?P<pub>[^\.]+)\.?$", rest)
+            r"(?P<title>.+?)\s*(?:\((?P<ed>[^)]*(?:판|ed\.)[^)]*)\))?\s*[\.\?]\s+"
+            r"(?P<place>[가-힣A-Za-z\s]{1,25}?)\s*[::]\s*(?P<pub>[^\.]+)\.?$", rest)
         if m:
             if not title_fixed:
                 e["title"] = m.group("title").strip().rstrip(".,")

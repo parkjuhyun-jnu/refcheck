@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.18-01"
+APP_VERSION = "2026.09.18-02"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -757,7 +757,10 @@ def _pair_manuscript_conversions(entries: list[dict]) -> dict[int, int]:
         if not no:
             continue
         for j in conv_idx:
-            if j not in used and entries[j].get("type") == "law" and                     verify_mod._law_no_digits(entries[j].get("report_no") or entries[j].get("raw") or "") == no:
+            # 변환 쪽은 규칙 구조화가 유형을 못 알아볼 수 있다('Reading Culture Promotion Act. Act No. 21447.')
+            # — 공포번호 숫자가 같으면 유형과 무관하게 짝이다
+            if j not in used and verify_mod._law_no_digits(
+                    entries[j].get("report_no") or entries[j].get("raw") or "") == no:
                 pairs[i] = j
                 used.add(j)
                 break
@@ -793,6 +796,12 @@ def _pair_manuscript_conversions(entries: list[dict]) -> dict[int, int]:
         cs = by_conv.get(key) or []
         if len(os_) == 1 and len(cs) == 1 and _year4(entries[os_[0]]):
             pairs[os_[0]] = cs[0]
+    #                                        ④ 같은 해 + 이름(성씨 로마자·기관명 낱말) 호환이 양쪽 유일
+    #    같은 해 보고서가 여럿이면 ③이 전부 실패해 변환 누락 판정을 못 했다(2026-09-18 실측)
+    used = set(pairs.values())
+    rem_orig = [(i, entries[i]) for i in orig_idx if i not in pairs]
+    rem_conv = [(j, entries[j]) for j in conv_idx if j not in used]
+    pairs.update(cc_mod.pair_by_name(rem_orig, rem_conv))
     return pairs
 
 
@@ -1028,8 +1037,19 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     #      KCI가 확인해 준 공식 영문 제목과 원고 변환 표기 대조
     conv_pairs: dict[int, int] = {}
     conv_issues_by_idx: dict[int, list[str]] = {}
+    conv_missing: list[dict] = []
     if any(e.get("is_en_conversion") for e in entries):
         conv_pairs = _pair_manuscript_conversions(entries)
+        # 원고가 변환 목록을 병기했는데 짝이 없는 국문 문헌 = 변환 목록 누락(또는 이름 표기가
+        # 크게 달라 짝을 못 찾은 것). 편집위원회가 손으로 잡던 항목(2026-09-18: 6건) — 결과의
+        # 영문 변환 목록에는 어차피 채워 넣지만, 어느 것이 빠졌는지도 알려 준다.
+        for i, e in enumerate(entries):
+            # 동양(일문·중문) 문헌은 변환 대상이 아니다 — 공통기준의 병기 목록은 국한문 문헌용
+            if e.get("is_en_conversion") or e.get("lang") != "ko" or i in conv_pairs:
+                continue
+            conv_missing.append({"raw": (e.get("raw") or "")[:120],
+                                 "authors": ", ".join(e.get("authors") or [])[:60],
+                                 "year": e.get("year", "")})
         if verify_results:
             for ko_i, conv_j in conv_pairs.items():
                 v = verify_results[ko_i] or {}
@@ -1215,6 +1235,14 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
         result["crosscheck"] = cc_mod.cross_check(body, entries)
     elif options.get("crosscheck"):
         result["warnings"].append("본문이 없어(목록 전용 파일) 본문-목록 대조를 건너뛰었습니다.")
+    if conv_missing:
+        if result.get("crosscheck"):
+            result["crosscheck"]["conversion_missing"] = conv_missing
+        result["warnings"].append(
+            f"원고의 영문 변환 목록에 짝이 없는 국문 문헌 {len(conv_missing)}건: "
+            + "; ".join((m["authors"] or m["raw"][:30]) + f" ({m['year']})" for m in conv_missing[:8])
+            + (" 외" if len(conv_missing) > 8 else "")
+            + " — 변환이 빠졌으면 결과의 영문 변환 목록에서 가져다 쓰세요.")
 
     # 8) 영문 변환 목록(문편협 기준 9·10항 — AI 모드)
     if options.get("english") and builtin:
@@ -1307,7 +1335,8 @@ def _summary_from(items: list[dict], crosscheck: dict | None) -> dict:
         "suggestions": sum(len(it.get("suggestions") or []) for it in items),
         "tips": sum(len(it.get("tips") or []) for it in items),
         "crosscheck_issues": (len(crosscheck["cited_not_listed"]) +
-                              len(crosscheck["listed_not_cited"])) if crosscheck else 0,
+                              len(crosscheck["listed_not_cited"]) +
+                              len(crosscheck.get("conversion_missing") or [])) if crosscheck else 0,
     }
 
 

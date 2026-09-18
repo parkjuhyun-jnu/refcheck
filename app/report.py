@@ -377,13 +377,24 @@ def build_result_docx(result: dict) -> bytes:
             p.add_run("본문에 인용되었으나 참고문헌 목록에 없는 문헌").bold = True
             for c in cc["cited_not_listed"]:
                 extra = " (같은 저자의 다른 연도 문헌은 목록에 있음 — 연도 확인)" if c.get("name_only_match") else ""
-                doc.add_paragraph(f"· {c['name']}({c['year']}) — “…{c['snippet']}…”{extra}").runs[0].font.size = Pt(9)
+                if c.get("note"):
+                    extra += f" ({c['note']})"
+                if c.get("candidates"):
+                    extra += " — 같은 해 미인용 항목: " + " / ".join(c["candidates"]) + " (같은 문헌이면 인용 표기를 목록의 저자명에 맞추세요)"
+                yr = f"({c['year']})" if c.get("year") else ""
+                doc.add_paragraph(f"· {c['name']}{yr} — “…{c['snippet']}…”{extra}").runs[0].font.size = Pt(9)
         if cc.get("listed_not_cited"):
             p = doc.add_paragraph()
             p.add_run("참고문헌 목록에 있으나 본문에서 인용을 찾지 못한 문헌").bold = True
             for c in cc["listed_not_cited"]:
+                note = f" ({c['note']})" if c.get("note") else ""
+                doc.add_paragraph(f"· {c.get('authors') or ''} ({c.get('year', '')}) — {c.get('raw', '')}{note}").runs[0].font.size = Pt(9)
+        if cc.get("conversion_missing"):
+            p = doc.add_paragraph()
+            p.add_run("국문 목록에 있으나 원고의 영문 변환 목록에서 짝을 찾지 못한 문헌 (변환 누락 여부 확인)").bold = True
+            for c in cc["conversion_missing"]:
                 doc.add_paragraph(f"· {c.get('authors') or ''} ({c.get('year', '')}) — {c.get('raw', '')}").runs[0].font.size = Pt(9)
-        if not cc.get("cited_not_listed") and not cc.get("listed_not_cited"):
+        if not cc.get("cited_not_listed") and not cc.get("listed_not_cited") and not cc.get("conversion_missing"):
             doc.add_paragraph("이상 없음 — 본문 인용과 참고문헌 목록이 서로 일치합니다.")
 
     # ── 건전성 리포트

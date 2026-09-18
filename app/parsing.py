@@ -137,21 +137,57 @@ def _parse_hwpx(data: bytes) -> str:
             root = ET.fromstring(zf.read(name))
         except ET.ParseError:
             continue
-        # 문단(<hp:p>) 단위로 텍스트(<hp:t>)를 모은다
-        for p in root.iter():
-            if p.tag.split("}")[-1] != "p":
-                continue
-            texts = []
-            for node in p.iter():
-                if node.tag.split("}")[-1] == "t":
-                    if node.text:
-                        texts.append(node.text)
-                    for child in node:
-                        if child.tail:
-                            texts.append(child.tail)
-            if texts or paragraphs:
-                paragraphs.append("".join(texts))
+        paragraphs.extend(_hwpx_paragraphs(root))
     return "\n".join(paragraphs)
+
+
+def _tag(node) -> str:
+    return node.tag.split("}")[-1]
+
+
+def _hwpx_paragraphs(root) -> list[str]:
+    """문단(<hp:p>) 단위 텍스트 — 표 칸·글상자의 문단은 저마다 한 줄, 메모(편집위원 코멘트)는 제외.
+
+    예전에는 문단마다 p.iter()로 하위 전부를 긁어 (1) 표 안 문단이 바깥 문단에 한 번,
+    제 문단으로 또 한 번 실려 '검사 도구'+'천경록(2006)'이 '도구천경록(2006)'으로 붙고
+    (2) 검토용 원고의 메모(fieldBegin type=MEMO) 본문이 참고문헌 항목 사이에 끼어들어
+    '교육부 (2024). … 국문 참고문헌에는 표기되어 있으나…'처럼 항목이 망가졌다
+    (2026-09-18 편집위원회 검토본 실측). 문단은 자기 run의 글자만 모으고, 안긴 문단은
+    따로 한 줄로 낸다.
+    """
+    memo_ids = set()
+    for fb in root.iter():
+        if _tag(fb) == "fieldBegin" and (fb.get("type") or "").upper() == "MEMO":
+            for sub in fb.iter():
+                memo_ids.add(id(sub))
+    out: list[str] = []
+
+    def own_text(p) -> str:
+        texts: list[str] = []
+
+        def walk(node):
+            for child in node:
+                t = _tag(child)
+                if t == "p" or id(child) in memo_ids:
+                    continue                      # 안긴 문단은 제 차례에, 메모는 아예 제외
+                if t == "t":
+                    if child.text:
+                        texts.append(child.text)
+                    for g in child:
+                        if g.tail:
+                            texts.append(g.tail)
+                    continue
+                walk(child)
+        walk(p)
+        return "".join(texts)
+
+    for p in root.iter():
+        if _tag(p) != "p" or id(p) in memo_ids:
+            continue
+        txt = own_text(p)
+        if txt or out:
+            out.append(txt)
+    return out
 
 
 def _parse_pdf(data: bytes) -> str:

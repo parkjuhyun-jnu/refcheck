@@ -50,14 +50,14 @@ def find_reference_section(full_text: str) -> tuple[str, str]:
 _EN_CONV_HEAD_RE = re.compile(
     r"^[ \t]*(?:"
     #   국문 표제(장식 선택적): 국한문/국문/한글 (참고)문헌(의) 영문/영어 표기·변환·번역·목록
-    r"[•·▪▶◆■○●※◦∙*#=\-–—<\[【(（]*[ \t]*"
+    r"[•·▪▶◆■○●※◦∙⦁‣▸►▹◉□▫⁃*#=\-–—<\[【(（]*[ \t]*"
     r"(?:"
     r"(?:국\s*[·ㆍ]?\s*한\s*문|한\s*문|국\s*문|한\s*글|한\s*국\s*어)[의\s]*(?:참\s*고\s*)?(?:문\s*헌)?[의\s]*"
     r"(?:영\s*문|영\s*어)\s*(?:(?:표\s*기|변\s*환|번\s*역|화)(?:\s*목\s*록)?|목\s*록)"
     r"|(?:참\s*고\s*문\s*헌[의\s]*)?(?:영\s*문|영\s*어)\s*(?:표\s*기|변\s*환|번\s*역|화)(?:\s*목\s*록)?"
     r")"
     #   영문 표제(괄호·꺾쇠 필수): (English translation / Romanization of references ... Korean)
-    r"|[•·▪▶◆■○●※◦∙*#=\-–—]*[ \t]*[<\[【(（]\s*"
+    r"|[•·▪▶◆■○●※◦∙⦁‣▸►▹◉□▫⁃*#=\-–—]*[ \t]*[<\[【(（]\s*"
     r"(?:English\s+translations?|Romanizations?|Transliterations?|Translated)"
     r"(?=[^\n]{0,160}\bKorean\b)"
     r"[^()（）\n]{0,160}"
@@ -102,7 +102,7 @@ def find_en_conversion_split(section_text: str) -> tuple[str, str, str]:
         conv = "\n".join(rest_lines).strip()
         if not conv:
             continue  # 표제 뒤에 내용이 없으면 분할하지 않는다(표제 줄은 split_entries가 거른다)
-        head = re.sub(r"\s+", " ", line).strip(" \t•·▪▶◆■○●※◦∙*#=–—<>[]【】()（）:：.。-")
+        head = re.sub(r"\s+", " ", line).strip(" \t•·▪▶◆■○●※◦∙⦁‣▸►▹◉□▫⁃*#=–—<>[]【】()（）:：.。-")
         return main, conv, head or "영문 변환 목록"
     return section_text, "", ""
 
@@ -144,7 +144,14 @@ def _looks_like_start(s: str) -> bool:
         return True
     if re.match(r"^[A-Z][A-Za-z\-']+\s+(?:&|and|et al)", s):
         return True
-    if re.match(r"^[A-Z][A-Za-z\-' ]{1,40}\(\s*" + _YEAR, s):
+    # 기관 저자는 길다 — 'American Association of School Librarians (2012)'가 40자 제한에 걸려
+    # 앞 법령 항목에 붙던 문제(2026-09-18 실측). 연도 없는 (n.d.)·(발행년불명)도 시작이다
+    if re.match(r"^[A-Z][A-Za-z\-'&,.() ]{1,160}\(\s*(?:" + _YEAR + r"|n\.d\.|발행년불명)", s):
+        return True
+    # 법령: '학교도서관진흥법. 법률 제18547호.' / 'School Library Promotion Act. Act No. 18547.'
+    if re.match(r"^[가-힣·\s]{2,30}(?:법|시행령|시행규칙|조례|규칙)\s*[\.。]?\s*(?:법률|대통령령|교육부령|총리령|조례)?\s*제\s*\d+\s*호", s):
+        return True
+    if re.match(r"^[A-Z][A-Za-z\-' ]{2,90}(?:Act|Decree|Ordinance|Rule|Regulation)s?\.\s*(?:Act|Decree|Presidential Decree)?\s*No\.", s):
         return True
     # 한자·일문
     if re.match(r"^[一-鿿぀-ゟ゠-ヿ]{2,}", s):
