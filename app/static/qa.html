@@ -172,7 +172,7 @@ select:focus,textarea:focus,input:focus{outline:2px solid var(--accent-soft);bor
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
-let NO_REGS_ORGS = ["한국문헌정보학회"];   // 자체 규정 원문 미등록 학회(응답의 org_has_regs로도 재확인)
+let NO_REGS_ORGS = [];   // 자체 규정 원문 미등록 학회(응답의 org_has_regs로 채움) — 2026-09-20 문헌정보학회 누리집 규정 등록으로 4개 학회 모두 원문 있음
 
 async function init(){
   try{
