@@ -107,6 +107,17 @@ def _base_result() -> dict:
 
 # ================================================================ 소스별 클라이언트
 
+def _doi_resolves(client: httpx.Client, doi: str) -> bool:
+    """doi.org 핸들 API로 DOI 실존 여부 — 등록기관 메타데이터가 없어도 해석되는지는 알 수 있다."""
+    r = _get_with_retry(client, "https://doi.org/api/handles/" + doi, params=None)
+    if r.status_code != 200:
+        return False
+    try:
+        return r.json().get("responseCode") == 1
+    except ValueError:
+        return False
+
+
 def _crossref_by_doi(client: httpx.Client, doi: str) -> dict | None:
     try:
         r = _get_with_retry(client, f"https://api.crossref.org/works/{quote(doi, safe='')}")
@@ -783,9 +794,44 @@ def _kci_doi_crosscheck(client: httpx.Client, entry: dict, doi: str):
         return None, False
     kci, err = _safe(verify_kr.kci_article_search, client,
                      entry["title"], (entry.get("authors") or [""])[0])
-    if not (kci and kci.get("doi", "").lower() == doi.lower()):
-        kci = None
-    return kci, err
+    if not kci:
+        return None, err
+    if kci.get("doi", "").lower() == doi.lower():
+        return kci, err
+    if not kci.get("doi") and kci.get("sim", 0) >= 0.9 and _biblio_agrees(entry, kci):
+        # KCI에 DOI가 등록되지 않은 논문(비즈니스융복합연구 2024 실측) — 제목이 사실상 같고
+        # 연도·권·호·면수까지 맞으면 같은 문헌이다. DOI 미등록만으로 '서지 불일치'로 몰지 않는다
+        kci["doi_unregistered"] = True
+        return kci, err
+    return None, err
+
+
+def _first_page(pages: str) -> str:
+    m = re.search(r"\d+", pages or "")
+    return m.group(0) if m else ""
+
+
+def _biblio_agrees(entry: dict, rec: dict) -> bool:
+    """연도·권(·호)·첫 면이 있는 것끼리 모두 같은가 — 제목 표기 언어가 달라도 같은 문헌이라는 근거.
+
+    Crossref·OpenAlex에 영문 제목만 등록된 국내 논문은 제목 유사도가 10%대로 떨어지지만
+    권호·면수는 등록기관과 무관하게 같다(2026-09-20 실측: 김민서·안현정 2024 → 9(6), 107-114).
+    """
+    def norm(v):
+        return re.sub(r"\D", "", str(v or ""))
+    checks = 0
+    for key in ("year", "volume", "issue"):
+        a, b = norm(entry.get(key)), norm(rec.get(key))
+        if a and b:
+            if a[:4] != b[:4]:
+                return False
+            checks += 1
+    a, b = _first_page(entry.get("pages") or ""), _first_page(rec.get("pages") or "")
+    if a and b:
+        if a != b:
+            return False
+        checks += 1
+    return checks >= 2
 
 
 def verify_entry(client: httpx.Client, entry: dict) -> dict:
@@ -803,6 +849,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             cr_title = " ".join(meta.get("title") or [])
             sim = _best_sim(entry.get("title", ""), meta)
             kci = None
+            cr_meta = _meta_from_crossref(meta)
+            biblio_ok = sim < 0.75 and _biblio_agrees(entry, cr_meta)
             if sim < 0.75:
                 kci, e_kci = _kci_doi_crosscheck(client, entry, doi)
                 lookup_err |= e_kci
@@ -830,8 +878,20 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 cr_lang = "국문" if _HANGUL_RE.search(cr_title) else "영문"
                 result.update(status="verified", source="KCI",
                               detail=f"DOI 확인됨 · KCI {my_lang} 제목 일치({kci.get('sim', 0):.0%})"
-                                     f" · Crossref에는 {cr_lang} 제목으로 등록됨",
+                                     f" · Crossref에는 {cr_lang} 제목으로 등록됨"
+                                     + (" · KCI에는 DOI 미등록(권호·면수 일치로 확인)" if kci.get("doi_unregistered") else ""),
                               meta=_meta_kr_for_entry(entry, kci))
+                if kci.get("doi_unregistered"):
+                    # DOI 자체는 Crossref가 확인했다 — 대조표에 'DOI (없음)'으로 어긋나 보이지 않게
+                    result["meta"]["doi"] = doi
+            elif biblio_ok:
+                # 제목 표기 언어만 다르고 연도·권·호·면수가 같은 문헌 — KCI에서 못 찾아도
+                # (미등재지·검색 함정) DOI가 가리키는 그 논문이다. 서지 불일치가 아니다
+                cr_lang = "국문" if _HANGUL_RE.search(cr_title) else "영문"
+                result.update(status="verified", source="Crossref",
+                              detail=f"DOI 확인됨 · Crossref에는 {cr_lang} 제목으로 등록됨(제목 유사도 {sim:.0%})"
+                                     " · 연도·권호·면수 일치로 같은 문헌 확인",
+                              meta=cr_meta)
             else:
                 result.update(status="mismatch", source="Crossref",
                               detail=f"DOI는 존재하나 제목 불일치({sim:.0%}) — Crossref: “{cr_title[:80]}” · 확인 필요",
@@ -900,9 +960,32 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             return result
         if lookup_err:
             _mark_lookup_failed(result)
-        else:
-            result.update(status="not_found",
-                          detail="DOI를 Crossref·DataCite·OpenAlex에서 찾을 수 없음 — DOI 오기 가능성, 확인 필요")
+            return result
+        # 해외 DB에 없는 DOI — KISTI(KoreaScience) 등록 DOI(10.9708 등)는 Crossref·DataCite·
+        # OpenAlex에 없다. 여기서 '미확인'으로 끝내면 KCI에 멀쩡히 있는 논문이 미확인이 된다
+        # (2026-09-20 실측: 김형희·전종순 2022). DOI를 뗀 채 제목으로 국내 사슬·Crossref 검색을
+        # 이어 가고, 찾은 레코드의 DOI가 원고와 같으면 DOI까지 확인된 것으로 본다.
+        resolves, _e = _safe(_doi_resolves, client, doi)
+        doi_note = ("DOI는 doi.org에서 해석되나 Crossref·DataCite·OpenAlex 미등록(KISTI 등 다른 등록기관)"
+                    if resolves else "원고의 DOI를 Crossref·DataCite·OpenAlex에서 찾을 수 없음")
+        if entry.get("title") and (etype == "journal" or lang == "ko"):
+            sub = verify_entry(client, dict(entry, doi=""))
+            m = sub.get("meta") or {}
+            if sub.get("status") == "verified":
+                if (m.get("doi") or "").lower() == doi.lower():
+                    sub["detail"] += f" · 원고 DOI는 {sub.get('source')} 등록과 일치(Crossref 등 해외 DB 미등록 DOI)"
+                    sub["found_doi"] = doi
+                elif m.get("doi"):
+                    sub["detail"] += (f" · 원고 DOI는 해외 DB에 없고 {sub.get('source')} 등록 DOI({m['doi']})와 다름"
+                                      " — DOI 확인 필요")
+                else:
+                    sub["detail"] += " · " + doi_note
+            else:
+                sub["detail"] = doi_note + (" · " + sub["detail"] if sub.get("detail") else "")
+                if not resolves and sub.get("status") in ("not_found", "skipped"):
+                    sub["detail"] += " — DOI 오기 가능성"
+            return sub
+        result.update(status="not_found", detail=doi_note + (" — DOI 오기 가능성, 확인 필요" if not resolves else " · 제목이 없어 서지 대조 불가"))
         return result
 
     # ---- 2) 국내 문헌: KCI(논문, 적중 시 RISS 교차 확인) / RISS(학위논문) / 국립중앙도서관(단행본)

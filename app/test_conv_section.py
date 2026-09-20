@@ -348,4 +348,21 @@ try:
 finally:
     verify_kr._kakao_docs, verify_kr.env_get = _orig_docs, _orig_env
 
+# ---------------------------------------------------------------- 10) 해외 DB에 없는 DOI·표기 언어만 다른 제목 (2026.09.20-02)
+print("[10] DOI가 Crossref에 없거나 제목 언어가 달라도 권호·면수로 같은 문헌 확인")
+ok(verify._biblio_agrees({"year": "2024", "volume": "9", "issue": "6", "pages": "107-114"},
+                         {"year": "2024", "volume": "9", "issue": "6", "pages": "107-114"}), "연도·권·호·첫 면 일치 → 같은 문헌")
+ok(verify._biblio_agrees({"year": "2024", "volume": "9", "pages": "107-114"},
+                         {"year": "2024", "volume": "9", "issue": "6", "pages": "107"}), "원고에 호가 없어도 있는 요소끼리 일치")
+ok(not verify._biblio_agrees({"year": "2024", "volume": "9", "issue": "6", "pages": "107-114"},
+                             {"year": "2024", "volume": "9", "issue": "6", "pages": "201-210"}), "첫 면이 다르면 다른 문헌")
+ok(not verify._biblio_agrees({"year": "2024"}, {"year": "2024"}), "연도 하나만으로는 판단하지 않음")
+e_doi = {"type": "journal", "title": "다문화청소년의 문화적응스트레스와 삶의 만족도 간의 관계", "doi": "10.9708/jksci.2022.27.04.999",
+         "year": "2022", "volume": "27", "issue": "4", "pages": "119-125"}
+m_doi = {"source": "KCI", "doi": "10.9708/jksci.2022.27.04.119", "year": "2022", "volume": "27", "issue": "4", "pages": "119-125"}
+sg = main_mod2._build_suggestions(e_doi, m_doi)
+ok(len(sg) == 1 and sg[0]["field"] == "doi" and sg[0]["suggested"].endswith(".119"), "원고 DOI ≠ KCI 등록 DOI → DOI 교정 제안")
+ok(main_mod2._build_suggestions(dict(e_doi, doi=""), m_doi) == [], "원고에 DOI가 없으면 넣으라고 하지 않음(확인될 경우에만 기입)")
+ok(main_mod2._build_suggestions(dict(e_doi, doi="10.9708/JKSCI.2022.27.04.119"), m_doi) == [], "대소문자만 다른 DOI는 같은 DOI")
+
 print(f"\n전체 {_PASS}건 통과")

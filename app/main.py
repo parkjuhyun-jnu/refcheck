@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.20-01"
+APP_VERSION = "2026.09.20-02"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -669,6 +669,13 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
             out.append({"field": "title", "label": "법령명", "current": t_cur,
                         "suggested": meta["title"], "source": meta.get("source", "")})
         return out
+    # 원고에 적은 DOI가 공식 서지의 DOI와 다르면 오기다 — 없는 DOI를 넣으라는 제안은 하지 않는다
+    # (공통기준: DOI는 확인될 경우에만 기입). 2026-09-20 실측: KCI 등록 DOI와 끝자리가 다른 원고
+    cur_doi = (entry.get("doi") or "").strip().lower()
+    new_doi = (meta.get("doi") or "").strip()
+    if cur_doi and new_doi and cur_doi != new_doi.lower():
+        out.append({"field": "doi", "label": "DOI", "current": entry.get("doi", "").strip(),
+                    "suggested": new_doi, "source": meta.get("source", "")})
     for f, label in fields:
         cur = (entry.get(f) or "").strip()
         new = (meta.get(f) or "").strip().replace("–", "-")
