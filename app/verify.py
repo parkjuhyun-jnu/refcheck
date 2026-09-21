@@ -853,6 +853,7 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             cr_title = " ".join(meta.get("title") or [])
             sim = _best_sim(entry.get("title", ""), meta)
             kci = None
+            kci2 = None
             cr_meta = _meta_from_crossref(meta)
             biblio_ok = sim < 0.75 and _biblio_agrees(entry, cr_meta)
             if sim < 0.75:
@@ -875,6 +876,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                                  or kci2.get("sim", 0) >= 0.9):
                         result["meta"] = _meta_kr_for_entry(entry, kci2)
                         result["detail"] += " · 서지는 KCI 기준(국문)"
+                    else:
+                        kci2 = None   # 같은 문헌으로 확인되지 않은 검색 결과는 등재 구분에도 쓰지 않는다
                 if lang == "west" and etype == "journal":
                     _eric_print_crosscheck(client, entry, result)
             elif kci:
@@ -913,7 +916,17 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 d = result["retraction"]["date"]
                 result["detail"] += f" · ⚠ {lab}{'(' + d + ')' if d else ''} 문헌"
             result["preprint"] = _check_preprint(client, entry, meta)
-            result["journal"] = _journal_reliability(client, entry)
+            # 등재 구분은 KCI 논문 상세의 값이 가장 정확하다 — DOI 경로에서는 이 값을 넘기지 않아
+            # '우수등재' 학술지가 RISS 학술지 레코드(등재정보 비어 있음)로 떨어져 '등재정보 없음'이
+            # 됐다(2026-09-21 신고: 교육학연구). KCI 레코드가 손에 있으면 상세를 받아 넘긴다
+            kci_reg = ""
+            kci_rec = kci or kci2
+            if kci_rec:
+                kci_reg, e_d = _kci_fill_detail(client, kci_rec)
+                lookup_err |= e_d
+                if kci_rec.get("kci_verified") and result.get("meta") is not None:
+                    result["meta"]["kci_verified"] = kci_rec["kci_verified"]
+            result["journal"] = _journal_reliability(client, entry, kci_reg)
             return result
         dc, e2 = _safe(_datacite_by_doi, client, doi)
         lookup_err |= e2
