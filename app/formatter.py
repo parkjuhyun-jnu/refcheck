@@ -250,8 +250,13 @@ def sentence_case(s: str) -> str:
     if not s or not re.search(r"[A-Za-z]", s):
         return s
     words = s.split()
-    cap_words = [w for w in words[1:] if w[:1].isupper() and not (w.isupper() and len(w) >= 2)]
-    if len(words) > 3 and len(cap_words) >= max(2, int(len(words) * 0.5)):
+    # Title Case 판정: 기능어를 뺀 내용어가 거의 다(80% 이상) 대문자로 시작할 때만.
+    # 종전 '전체 낱말의 절반 이상 대문자'는 'Reading in Seoul: The case of Korea'처럼 고유명사가
+    # 몇 개 든 문장식 제목까지 Title Case로 보고 전부 낮춰 'seoul'·'korea'를 만들었다(2026-09-21)
+    content = [w for w in words[1:] if re.match(r"[A-Za-z]", w) and len(w) >= 3
+               and w.lower().strip(",.;:'’") not in _TC_FUNCTION and not (w.isupper() and len(w) >= 2)]
+    lower_content = [w for w in content if w[:1].islower()]
+    if len(words) > 3 and len(content) >= 2 and len(lower_content) <= len(content) // 5:
         out = []
         for i, w in enumerate(words):
             if w.isupper() and len(w) >= 2:
@@ -261,22 +266,49 @@ def sentence_case(s: str) -> str:
             else:
                 out.append(w.lower())
         s = " ".join(out)
-        # 물음표·느낌표 뒤는 새 문장이므로 대문자. 콜론 뒤 부제는 아래에서 소문자로 통일
+        # 물음표·느낌표 뒤는 새 문장이므로 대문자. 콜론 뒤 부제는 위에서 이미 소문자
         s = re.sub(r"([?!]\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
-    else:
-        s = s[0].upper() + s[1:] if s[0].isalpha() else s
+        return s
+    s = s[0].upper() + s[1:] if s[0].isalpha() else s
     # 콜론 뒤 부제의 첫 낱말은 소문자 — 학회 오류유형 안내 1.2 '콜론(:) 뒤에 이어지는 부제를
     # 포함한 나머지 단어는 소문자로 유지'(예: A study on digital libraries: user behavior analysis),
-    # 공통기준 6) 예시 'Recent trends in user studies: action research and …'도 같다.
+    # 공통기준 Ⅱ-1)(5)·6) 예시 'Recent trends in user studies: action research and …'도 같다.
     # APA는 콜론 뒤를 대문자로 쓰므로 원고가 'Why school librarians matter: What years …'처럼
-    # 와도 낮춘다(이용자 지적 2026-09-18). 약어(SNS)·내부 대문자(iPhone)·인명 이니셜(J.)은 둔다.
+    # 와도 낮춘다(이용자 지적 2026-09-18). 고유명사는 기계가 못 가리므로 관사·의문사·전치사 등
+    # 부제 첫머리에 흔한 일반어만 낮추고(이용자 확정 2026-09-21), 그 밖의 대문자 낱말(Korea·IRT)은
+    # 저자가 쓴 대로 둔다. 한 글자 'A'를 약어로 오인해 'A new tool'이 남던 문제도 이것으로 해소.
     def _lower_sub(m):
         w = m.group(2)
-        if w.isupper() or any(c.isupper() for c in w[1:]) or w.endswith("."):
-            return m.group(0)
-        return m.group(1) + w[0].lower() + w[1:]
-    s = re.sub(r"(:\s+)([A-Z][A-Za-z'’\-]*\.?)", _lower_sub, s)
+        if w.lower() in _SUBTITLE_COMMON:
+            return m.group(1) + w[0].lower() + w[1:]
+        return m.group(0)
+    s = re.sub(r"(:\s+)([A-Z][A-Za-z'’\-]*)", _lower_sub, s)
     return s
+
+
+# Title Case에서도 소문자로 남는 기능어 — Title Case 판정에서 제외
+_TC_FUNCTION = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or", "but", "by", "with",
+                "from", "as", "is", "are", "vs", "vs.", "via", "its", "into", "over", "per", "nor", "so",
+                "yet", "up", "off", "out", "than", "that", "this", "de", "du", "des", "et", "la", "le"}
+
+# 콜론 뒤 부제의 첫 낱말로 흔한 일반어 — 관사·지시사·의문사·대명사·전치사·접속사와 학술 제목의
+# 상투어. 여기 없는 대문자 낱말은 고유명사일 수 있어 그대로 둔다.
+_SUBTITLE_COMMON = {
+    "a", "an", "the", "this", "that", "these", "those", "its", "our", "their", "his", "her", "some", "any",
+    "each", "every", "one", "two", "three", "it", "we", "you", "they", "what", "which", "who", "whom",
+    "whose", "how", "why", "when", "where", "whether", "is", "are", "was", "were", "do", "does", "can",
+    "should", "toward", "towards", "from", "for", "of", "in", "on", "at", "by", "to", "with", "into",
+    "between", "beyond", "under", "over", "through", "during", "after", "before", "about", "against",
+    "among", "across", "and", "or", "but", "if", "as", "not", "new", "current", "recent", "evidence",
+    "implications", "lessons", "perspectives", "insights", "findings", "results", "case", "cases", "study",
+    "studies", "analysis", "review", "comparison", "comparing", "focusing", "focus", "role", "roles",
+    "challenges", "trends", "using", "based", "exploring", "examining", "developing", "development",
+    "measuring", "assessing", "evaluating", "understanding", "rethinking", "revisiting", "building",
+    "designing", "testing", "validation", "effects", "effect", "impact", "impacts", "action",
+    "theory", "practice", "policy", "issues", "problems", "prospects", "user", "users", "reading",
+    "learning", "teaching", "research", "empirical", "an", "conceptual", "critical", "systematic",
+    "mediating", "moderating", "structural", "longitudinal", "qualitative", "quantitative",
+}
 
 
 # ---------------------------------------------------------------- 형식 변환
@@ -411,7 +443,10 @@ def format_entry(e: dict) -> str:
         if container:
             parts.append(container + ".")
         if e.get("url"):
-            parts.append(("Available: " if west else "출처: ") + e["url"])
+            # 접두어는 자료 언어를 따른다: 국문 '출처:', 영문 'Available:'(공통기준 Ⅱ-6·학회 안내 5).
+            # 동양문헌(일문·중문)은 기준에 없어 영문과 같이 Available:로(이용자 확정 2026-09-21,
+            # 비블리아 편집위원회도 저자의 Available:을 그대로 둠) — 기준 개정(안) Ⅱ-8
+            parts.append(("출처: " if lang == "ko" else "Available: ") + e["url"])
 
     elif t == "conference":
         head()
@@ -479,7 +514,7 @@ def format_entry(e: dict) -> str:
         # 영문은 단독 저작에도 붙인다 — 같은 예시의
         # 'Functional Requirements for Bibliographic Records: Final Report. Available: http://…'.
         # 학술지 논문은 'DOI 또는 URL'을 그대로 적으므로 붙이지 않는다.
-        prefix = "Available: " if west and t not in ("journal", "newspaper") else ""
+        prefix = "Available: " if lang != "ko" and t not in ("journal", "newspaper") else ""
         parts.append(prefix + e["url"])
 
     s = " ".join(p for p in parts if p and p.strip())

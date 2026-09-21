@@ -99,6 +99,12 @@ def _best_sim(entry_title: str, m: dict) -> float:
     return max((_similarity(entry_title, v) for v in _crossref_titles(m)), default=0.0)
 
 
+def _crossref_korean(meta: dict) -> bool:
+    """Crossref 레코드가 국내 학술지의 것인가 — 발행처·수록지명에 Korea/Korean이 있거나 KCI 계열 DOI 접두."""
+    text = " ".join([str(meta.get("publisher") or "")] + list(meta.get("container-title") or []))
+    return bool(re.search(r"korea", text, re.I)) or bool(re.match(r"10\.(16981|4275|3743|17095|29401|22818|20880|24008|30916|18284|26589|9708|31152|18842)/", str(meta.get("DOI") or ""), re.I))
+
+
 def _base_result() -> dict:
     return {"status": "skipped", "detail": "", "found_doi": "", "source": "",
             "retraction": None, "journal": None, "preprint": None, "meta": None,
@@ -221,6 +227,132 @@ def _openalex_search(client: httpx.Client, entry: dict) -> dict | None:
     if best and best_sim >= 0.85:
         best["_sim"] = best_sim
         return best
+    return None
+
+
+# ---------------------------------------------------------------- 해외 학위논문 — 리포지터리 폴백
+#
+# RISS(국내 대학이 구입한 해외 박사논문)에 없는 해외 학위논문을 Crossref(학위논문 유형) →
+# OpenAlex(학위논문 유형) → CORE(전 세계 OA 리포지터리 집합, 대학 ETD 포함) 순으로 찾는다.
+# 2026-09-21 실측: Heathington(1975, Tennessee)은 RISS·OpenAlex·Crossref엔 없고 CORE가
+# TRACE(테네시대 리포지터리) 레코드를 준다. Google Scholar는 공식 API가 없어 링크만 단다.
+# 제목 유사도 0.85 이상 + 저자 성 일치 + 연도 ±1이 모두 맞을 때만 적중으로 본다(동명 논문 방지).
+
+_CORE_URL = "https://api.core.ac.uk/v3/search/works"
+
+
+def _surname_of(author: str) -> str:
+    a = (author or "").strip()
+    if not a:
+        return ""
+    last = a.split(",")[0].strip() if "," in a else a.split()[-1]
+    return re.sub(r"[^a-z]", "", last.lower())
+
+
+def _thesis_match(entry: dict, title: str, authors: list[str], year) -> float:
+    """후보가 원고의 학위논문과 같은가 — 맞으면 제목 유사도(0.85 이상), 아니면 0."""
+    sim = _similarity(entry.get("title", ""), title or "")
+    if sim < 0.85:
+        return 0.0
+    want = re.match(r"(\d{4})", entry.get("year") or "")
+    y = re.match(r"(\d{4})", str(year or ""))
+    if want and y and abs(int(want.group(1)) - int(y.group(1))) > 1:
+        return 0.0
+    sur = _surname_of((entry.get("authors") or [""])[0])
+    if sur and authors and not any(sur in re.sub(r"[^a-z]", "", (a or "").lower()) for a in authors):
+        return 0.0
+    return sim
+
+
+def _crossref_thesis_search(client: httpx.Client, entry: dict) -> dict | None:
+    title = entry.get("title", "")
+    if not title or len(title) < 8:
+        return None
+    q = title + " " + (entry.get("authors") or [""])[0]
+    r = _get_with_retry(client, "https://api.crossref.org/works",
+                        params={"query.bibliographic": q, "rows": 5, "filter": "type:dissertation"})
+    if r.status_code != 200:
+        return None
+    try:
+        items = r.json().get("message", {}).get("items", [])
+    except ValueError:
+        return None
+    for it in items:
+        t = " ".join(it.get("title") or [])
+        au = [(a.get("family") or a.get("name") or "") for a in (it.get("author") or [])]
+        yr = ((it.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+        sim = _thesis_match(entry, t, au, yr)
+        if sim:
+            insts = it.get("institution") or []
+            inst = (insts[0] or {}).get("name", "") if insts else ""
+            return {"title": t, "authors": au, "year": str(yr or ""), "doi": it.get("DOI", ""),
+                    "institution": inst, "url": "", "source": "Crossref", "sim": sim}
+    return None
+
+
+def _openalex_thesis_search(client: httpx.Client, entry: dict) -> dict | None:
+    title = entry.get("title", "")
+    if not title or len(title) < 8:
+        return None
+    r = _get_with_retry(client, "https://api.openalex.org/works",
+                        params={"search": title[:200], "filter": "type:dissertation", "per-page": 5})
+    if r.status_code != 200:
+        return None
+    try:
+        items = r.json().get("results", [])
+    except ValueError:
+        return None
+    for it in items:
+        au = [(a.get("author") or {}).get("display_name", "") for a in it.get("authorships") or []]
+        sim = _thesis_match(entry, it.get("title") or "", au, it.get("publication_year"))
+        if sim:
+            loc = it.get("primary_location") or {}
+            src = (loc.get("source") or {}).get("display_name", "")
+            return {"title": it.get("title") or "", "authors": au, "year": str(it.get("publication_year") or ""),
+                    "doi": (it.get("doi") or "").replace("https://doi.org/", ""),
+                    "institution": "", "repository": src,
+                    "url": loc.get("landing_page_url") or it.get("id") or "", "source": "OpenAlex", "sim": sim}
+    return None
+
+
+def _core_thesis_search(client: httpx.Client, entry: dict) -> dict | None:
+    """CORE(core.ac.uk) — 키 없이도 되지만 분당 10회 제한. CORE_API_KEY가 있으면 그 키로."""
+    title = entry.get("title", "")
+    if not title or len(title) < 8:
+        return None
+    headers = dict(_HEADERS)
+    key = verify_kr.env_get("CORE_API_KEY").strip()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    q = 'title:"' + title.replace('"', " ")[:200] + '"'
+    # 무료(키 없음) 한도는 10회/10분 — 429를 재시도로 기다리면 검증 전체가 늦어지므로 바로 알린다
+    try:
+        # CORE는 301로 한 번 돌린다(실측) — 따라가지 않으면 200이 아니라 조용히 '없음'이 된다
+        r = client.get(_CORE_URL, params={"q": q, "limit": 5}, headers=headers, timeout=_TIMEOUT,
+                       follow_redirects=True)
+    except httpx.HTTPError as ex:
+        raise LookupUnavailable(f"CORE: {ex}")
+    if r.status_code == 429:
+        raise LookupUnavailable("CORE 한도 초과(무료 10회/10분 — CORE_API_KEY 등록 시 완화)")
+    if r.status_code >= 500:
+        raise LookupUnavailable(f"CORE HTTP {r.status_code}")
+    if r.status_code != 200:
+        return None
+    try:
+        items = r.json().get("results", [])
+    except ValueError:
+        return None
+    for it in items:
+        au = [(a or {}).get("name", "") for a in it.get("authors") or []]
+        sim = _thesis_match(entry, it.get("title") or "", au, it.get("yearPublished"))
+        if sim:
+            providers = [(p or {}).get("name", "") for p in it.get("dataProviders") or []]
+            repo = it.get("publisher") or (providers[0] if providers else "")
+            wid = it.get("id")
+            return {"title": it.get("title") or "", "authors": au, "year": str(it.get("yearPublished") or ""),
+                    "doi": it.get("doi") or "", "institution": "", "repository": repo,
+                    "url": f"https://core.ac.uk/works/{wid}" if wid else (it.get("downloadUrl") or ""),
+                    "pdf": it.get("downloadUrl") or "", "source": "CORE", "sim": sim}
     return None
 
 
@@ -542,11 +674,12 @@ def _journal_reliability(client: httpx.Client, entry: dict,
     if not jname or len(jname) < 3:
         return None
 
+    # KCI가 논문 상세로 알려준 등재 구분이 있으면 표기 언어와 무관하게 그대로 쓴다(학술지명 유사도
+    # 추정보다 정확). 영문 변환 항목·로마자 인용의 국내 학술지도 여기서 판정된다
+    if kci_registration:
+        flag = "ok" if "등재" in kci_registration and "후보" not in kci_registration else "warn"
+        return {"flag": flag, "detail": f"KCI {kci_registration} 학술지"}
     if entry.get("lang") == "ko":
-        # KCI가 논문 상세로 알려준 등재 구분이 있으면 그대로 쓴다(학술지명 유사도 추정보다 정확)
-        if kci_registration:
-            flag = "ok" if "등재" in kci_registration and "후보" not in kci_registration else "warn"
-            return {"flag": flag, "detail": f"KCI {kci_registration} 학술지"}
         st = verify_kr.kci_journal_status(client, jname)
         if st == "listed":
             return {"flag": "ok", "detail": "KCI 조회 확인 학술지"}
@@ -867,15 +1000,20 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
                 # 2026-09-07): Crossref 메타는 수록지가 영문 등록명이라 국문 인용의
                 # '한국도서관·정보학회지'가 어긋난 것처럼 대조표에 표시된다.
                 # 같은 문헌임이 DOI 또는 높은 유사도로 확인될 때만 바꿔 싣는다.
-                if lang == "ko" and _HANGUL_RE.search(entry.get("title", "")):
+                # 국내 논문이면 표기 언어와 무관하게 KCI 레코드를 찾아 둔다 — KCI는 영문 제목으로도
+                # 검색되므로(실측) 영문 변환 항목·로마자 인용도 등재 구분을 KCI 상세에서 받는다
+                # (2026-09-21 신고: 'Journal of Korean Library and Information Science Society'가
+                # RISS 학술지명 미확인으로 떨어짐). 서지 교체(KCI 기준)는 국문 인용에만 한다
+                if lang == "ko" or entry.get("is_en_conversion") or _crossref_korean(meta):
                     kci2, e_k2 = _safe(verify_kr.kci_article_search, client,
                                        entry.get("title", ""),
                                        (entry.get("authors") or [""])[0])
                     lookup_err |= e_k2
                     if kci2 and (kci2.get("doi", "").lower() == doi.lower()
                                  or kci2.get("sim", 0) >= 0.9):
-                        result["meta"] = _meta_kr_for_entry(entry, kci2)
-                        result["detail"] += " · 서지는 KCI 기준(국문)"
+                        if _HANGUL_RE.search(entry.get("title", "")):
+                            result["meta"] = _meta_kr_for_entry(entry, kci2)
+                            result["detail"] += " · 서지는 KCI 기준(국문)"
                     else:
                         kci2 = None   # 같은 문헌으로 확인되지 않은 검색 결과는 등재 구분에도 쓰지 않는다
                 if lang == "west" and etype == "journal":
@@ -1269,9 +1407,33 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             return result
         if not verify_kr.riss_enabled():
             lookup_err = True  # 조회 도중 다른 스레드가 인증 오류로 RISS를 껐다 — '미발견'이 아니다
+        # RISS에 없으면 학위논문 DOI(Crossref) → OpenAlex → OA 리포지터리 집합(CORE) 순으로
+        # 찾는다(사용자 요청 2026-09-21: Heathington 1975가 테네시대 리포지터리에 있는데 미확인)
+        core_limited = False
+        for fn in (_crossref_thesis_search, _openalex_thesis_search, _core_thesis_search):
+            hit, e_h = _safe(fn, client, entry)
+            if fn is _core_thesis_search and e_h:
+                core_limited = True   # CORE만 못 본 것 — 다른 정보원 결과는 유효하므로 '일시 오류'로 덮지 않는다
+            else:
+                lookup_err |= e_h
+            if hit:
+                detail = f"{hit['source']} 대조 성공(제목 일치 {hit['sim']:.0%}) · RISS 미수록"
+                if hit.get("repository"):
+                    detail += f" · 리포지터리: {hit['repository']}"
+                if hit.get("doi"):
+                    result["found_doi"] = hit["doi"]
+                meta = {"title": hit["title"], "year": hit["year"], "authors": hit["authors"],
+                        "doi": hit.get("doi", ""), "url": hit.get("url", ""), "source": hit["source"],
+                        "institution": hit.get("institution", ""), "degree": "",
+                        "repository": hit.get("repository", "")}
+                result.update(status="verified", source=hit["source"], detail=detail, meta=meta)
+                return result
         # 국내 대학이 구입한 해외 박사논문만 실려 있어 미발견이 곧 허위는 아니다
-        note = ("RISS(해외 학위논문)에서 일치 문헌을 찾지 못함 — 수록 범위가 제한적이라 "
-                "실제로 존재해도 확인되지 않을 수 있습니다, 원문 확인 권장")
+        note = ("RISS(해외 학위논문)·Crossref·OpenAlex·CORE(OA 리포지터리)에서 일치 문헌을 찾지 못함 — "
+                "수록 범위가 제한적이라 실제로 존재해도 확인되지 않을 수 있습니다, Google Scholar·OATD 검색 링크로 확인 권장")
+        if core_limited:
+            note = ("RISS(해외 학위논문)·Crossref·OpenAlex에서 일치 문헌을 찾지 못함 · CORE(OA 리포지터리)는 조회 한도 초과로 "
+                    "보지 못함(잠시 후 재검증하거나 관리자가 CORE_API_KEY 등록) — Google Scholar·OATD 검색 링크로 확인 권장")
         if entry.get("url"):
             # URL이 있는 해외 학위논문은 종전처럼 링크 생존으로 판정한다(링크가 살아 있으면
             # '문제' 항목으로 세지 않는다) — RISS 미수록은 부기만 한다

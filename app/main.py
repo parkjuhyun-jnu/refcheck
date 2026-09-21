@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.21-04"
+APP_VERSION = "2026.09.21-05"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -1074,9 +1074,9 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     if options.get("verify"):
         # 가장 오래 걸리는 구간 — 몇 건째 조회 중인지 실시간으로 알린다
         def _verify_progress(done: int, total: int):
-            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 13개 정보원, {done}/{total}건 조회)", filename)
+            progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 14개 정보원, {done}/{total}건 조회)", filename)
 
-        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 13개 정보원, {len(entries)}건)", filename)
+        progress(f"실존·윤리 검증 (KCI·RISS·Crossref 등 14개 정보원, {len(entries)}건)", filename)
         verify_results = verify_mod.verify_entries(entries, progress_cb=_verify_progress)
         for i, (e, v) in enumerate(zip(entries, verify_results)):
             if v.get("status") != "verified":
@@ -2337,6 +2337,9 @@ def get_sources():
              "state": "on" if kr.get("kakao") else "off"},
             {"name": "국회도서관 국가학술정보", "role": "학위논문·단행본 폴백 대조",
              "state": "on" if kr.get("nanet") else "off"},
+            {"name": "CORE (core.ac.uk, 전 세계 OA 리포지터리 집합)",
+             "role": "RISS에 없는 해외 학위논문 폴백 대조(대학 리포지터리 ETD) — Crossref·OpenAlex 학위논문 유형 다음 순서",
+             "state": "on"},
             {"name": "국가법령정보센터 (법제처)",
              "role": "법령 실존·현행 공포번호·시행일 대조, 영어번역 법령명(영문 변환 목록에 사용)"
                      + ("" if kr.get("law_oc", "test") != "test" else " — 공동활용 예시 계정으로 조회 중(.env LAW_OC 권장)"),
@@ -2355,7 +2358,7 @@ def get_sources():
         "note": ("국내 학술지 논문은 KCI를 전거로 대조한 뒤 RISS로 한 번 더 교차 확인합니다"
                  "(KCI 미등재지는 RISS → Crossref 순). 학위논문은 RISS(국내·해외) → 국회도서관, "
                  "단행본은 국립중앙도서관 → 카카오 책 → 국회도서관 → RISS, 보고서는 국립중앙도서관 → 국회도서관 → RISS 순으로 대조합니다. "
-                 "법령은 국가법령정보센터에서 현행 공포번호와 영문 법령명을 확인합니다. "
+                 "법령은 국가법령정보센터에서 현행 공포번호와 영문 법령명을 확인합니다. 해외 학위논문은 RISS → Crossref·OpenAlex(학위논문) → CORE(OA 리포지터리) 순입니다. "
                  "해외 문헌은 Crossref를 시작으로 OpenAlex·Semantic Scholar·ERIC 순서로 대조하고(해외 단행본은 카카오 책), "
                  "국내 논문의 영문 인용은 KCI·RISS의 공식 영문 제목으로도 대조하며, 국내 문헌이라도 "
                  "DOI가 있으면 해외 정보원에서 함께 확인합니다. 그래도 확인되지 않은 항목에는 "

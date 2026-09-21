@@ -74,12 +74,22 @@ def backfill_from_raw(e: dict) -> dict:
         m = re.search(r"\b10\.\d{4,9}/[^\s\"<>]+", raw)
         if m:
             e["doi"] = m.group(0).rstrip(".,;)")
+    if (e.get("type") == "report" and (e.get("url") or "").strip()
+            and not (e.get("place") or "").strip() and not (e.get("report_no") or "").strip()
+            and _norm_pub(e.get("publisher")) in ("", _norm_pub((e.get("authors") or [""])[0]))):
+        # 기관 누리집에 올린 조사 결과 페이지처럼 URL만 있고 발행지·보고서 번호가 없으면 웹자료다 —
+        # 보고서로 두면 '발행처 소재지 확인 필요'를 요구하고 접두어도 안 붙는다(이용자 확정 2026-09-21)
+        e["type"] = "web"
     if e.get("type") == "journal" and not (e.get("volume") or "").strip() and (e.get("issue") or "").strip():
         # 권 없이 통권 번호만 매기는 학술지('국어교육, 170, 81-122') — AI가 그 번호를 호에 넣기도
         # 하고 권에 넣기도 한다(배치마다 다름). 참고문헌은 그 번호를 권 자리에 쓰므로 권으로
         # 통일해 형식 변환·KCI 대조·교정 제안이 같은 자리를 보게 한다(2026-09-21 신고: 번호 사라짐)
         e["volume"], e["issue"] = e["issue"].strip(), ""
     return e
+
+
+def _norm_pub(s: str) -> str:
+    return re.sub(r"[\s\(\)（）·.,]+", "", (s or "")).lower()
 
 
 _HANGUL = re.compile(r"[가-힣]")

@@ -406,4 +406,35 @@ ok(len(main_mod2._build_suggestions(e_n, dict(m_n, kci_verified="Y"))) == 1, "�
 ok(main_mod2._build_suggestions(dict(e_n, volume="14"), m_n) and main_mod2._build_suggestions(dict(e_n, volume="14"), m_n)[0]["field"] == "volume",
    "검증 N이어도 권·호 등 다른 요소는 제안(면수만 보류)")
 
+# ---------------------------------------------------------------- 14) 부제 소문자 범위·해외 학위논문 대조 (2026.09.21-05)
+print("[14] 콜론 뒤 부제 — 관사·일반어만 소문자, 고유명사 보존 / 해외 학위논문 리포지터리 매칭")
+sc14 = formatter.sentence_case
+ok(sc14("Measuring attitude toward reading: A new tool for teachers") == "Measuring attitude toward reading: a new tool for teachers",
+   "한 글자 관사 'A'도 소문자 (McKenna & Kear 1990 — 이용자 지적 2026-09-21)")
+ok(sc14("Reading in Seoul: The case of Korea") == "Reading in Seoul: the case of Korea", "고유명사(Seoul·Korea)는 그대로, 관사 The만 낮춤")
+ok(sc14("Learning analytics: Korea and Japan compared") == "Learning analytics: Korea and Japan compared", "콜론 뒤가 고유명사면 손대지 않음")
+ok(sc14("Digital Library Research: Current Developments And Trends") == "Digital library research: current developments and trends", "Title Case 원고는 종전대로 전부 낮춤")
+ok(sc14("A Study on Digital Libraries: User Behavior Analysis") == "A study on digital libraries: user behavior analysis", "학회 안내 예시 그대로")
+ok(sc14("Is the CVI an acceptable indicator of content validity? Appraisal and recommendations").endswith("? Appraisal and recommendations"), "물음표 뒤 새 문장은 대문자 유지")
+tm = verify._thesis_match
+e_th = {"title": "The Development of Scales to Measure Attitudes Toward Reading", "authors": ["Heathington, B. S."], "year": "1975"}
+ok(tm(e_th, "The Development of Scales to Measure Attitudes Towards Reading", ["Heathington, Betty Sue"], "1975") > 0.9, "CORE 레코드(Towards·전체 이름) 일치")
+ok(tm(e_th, "The Development of Scales to Measure Attitudes Towards Reading", ["Smith, John"], "1975") == 0, "저자 성이 다르면 불일치")
+ok(tm(e_th, "The Development of Scales to Measure Attitudes Towards Reading", ["Heathington, Betty Sue"], "1990") == 0, "연도가 1년 넘게 다르면 불일치")
+ok(tm(e_th, "Scales for Reading Motivation in Adolescents", ["Heathington, Betty Sue"], "1975") == 0, "제목 유사도 0.85 미만이면 불일치")
+
+# ---------------------------------------------------------------- 15) 웹자료 접두어·유형 (2026.09.21-05)
+print("[15] 비국문 웹자료는 Available:, URL만 있는 기관 페이지는 웹자료로")
+w_e = {"type": "web", "lang": "east", "authors": ["全国学校図書館協議会"], "year": "2025a", "title": "第70回 学校読書調査の結果",
+       "url": "https://www.j-sla.or.jp/x", "raw": "x"}
+ok(formatter.format_entry(dict(w_e)).endswith("Available: https://www.j-sla.or.jp/x"), "일문 웹자료 → Available: (이용자 확정 2026-09-21)")
+ok(formatter.format_entry(dict(w_e, lang="ko", authors=["경기도교육청"], title="2024 학생 독서실태조사 결과")).endswith("출처: https://www.j-sla.or.jp/x"), "국문 웹자료 → 출처:")
+ok(formatter.format_entry(dict(w_e, lang="west", authors=["Great School Libraries"], title="Great school libraries survey")).endswith("Available: https://www.j-sla.or.jp/x"), "영문 웹자료 → Available:")
+r_e = rules_mod.backfill_from_raw({"type": "report", "lang": "east", "authors": ["全国学校図書館協議会"], "year": "2025a", "title": "第70回 学校読書調査の結果",
+                                    "url": "https://www.j-sla.or.jp/x", "publisher": "全国学校図書館協議会", "raw": "x"})
+ok(r_e["type"] == "web", "URL만 있고 발행지·보고서 번호 없는 '보고서'는 웹자료로 재분류 (발행지 경고 없앰)")
+ok(rules_mod.backfill_from_raw({"type": "report", "lang": "ko", "authors": ["한국교육과정평가원"], "year": "2023", "title": "읽기 검사지",
+                                 "report_no": "ORM 2022-34", "url": "https://x", "raw": "x"})["type"] == "report", "보고서 번호가 있으면 보고서 유지")
+ok(rules_mod.backfill_from_raw({"type": "report", "lang": "ko", "authors": ["교육부"], "year": "2024", "title": "제4차 학교도서관 진흥 기본계획", "raw": "x"})["type"] == "report", "URL이 없으면 보고서 유지")
+
 print(f"\n전체 {_PASS}건 통과")
