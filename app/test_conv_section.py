@@ -437,4 +437,11 @@ ok(rules_mod.backfill_from_raw({"type": "report", "lang": "ko", "authors": ["한
                                  "report_no": "ORM 2022-34", "url": "https://x", "raw": "x"})["type"] == "report", "보고서 번호가 있으면 보고서 유지")
 ok(rules_mod.backfill_from_raw({"type": "report", "lang": "ko", "authors": ["교육부"], "year": "2024", "title": "제4차 학교도서관 진흥 기본계획", "raw": "x"})["type"] == "report", "URL이 없으면 보고서 유지")
 
+# ---------------------------------------------------------------- 16) 변환 항목의 언어 의심 메모 (2026.09.21-06)
+print("[16] '국한문 참고문헌의 영문 표기' 아래 항목에는 '한국어 논문의 영문 제목일 가능성' 메모를 남기지 않음")
+lr = main_mod2._LANG_NOTE_RE
+ok(lr.search("원문이 한국어로 작성된 논문의 영문 제목일 가능성 있음, 언어 확인 필요") is not None, "AI 언어 의심 메모 인식 (김지숙·김기영 2020 실측)")
+ok(lr.search("국문 문헌의 로마자 표기일 가능성, 확인 필요") is not None, "로마자 표기 의심도 인식")
+ok(lr.search("DOI 확인 필요") is None and lr.search("수여기관 확인 필요") is None, "다른 확인 메모는 그대로")
+
 print(f"\n전체 {_PASS}건 통과")

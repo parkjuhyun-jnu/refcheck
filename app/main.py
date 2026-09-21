@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.21-05"
+APP_VERSION = "2026.09.21-06"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -596,6 +596,11 @@ def _author_name_note(ko_name: str, fixed: str, hist: list, cr: str, kci: str) -
     return " · ".join(parts)
 
 
+# AI 구조화 메모 중 '영문 표기된 한국어 논문 아니냐'는 언어 의심 — 변환 항목에서는 무의미
+_LANG_NOTE_RE = re.compile(
+    r"(한국어|국문|국내)\s*(로\s*)?(작성|논문|문헌).{0,30}(영문|영어|로마자)|언어\s*확인|(영문|영어)\s*(제목|표기)일\s*가능성")
+
+
 def _drop_resolved_notes(e: dict, v: dict) -> None:
     """AI 구조화가 남긴 '확인 필요' 메모 가운데 검증이 해소한 것을 지운다.
 
@@ -1065,6 +1070,10 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
                 if full and formatter.has_initials(e.get("authors") or []) \
                         and len(full) == len(e.get("authors") or full):
                     e["authors"] = full
+                # 변환 항목은 '한국어 논문의 영문 표기'임이 소절 표제로 이미 확정된 것 — AI가 남긴
+                # '원문이 한국어로 작성된 논문의 영문 제목일 가능성, 언어 확인 필요' 류 메모는
+                # 확인할 것이 없는 지적이라 지운다(이용자 지적 2026-09-21)
+                e["notes"] = [n for n in (e.get("notes") or []) if not _LANG_NOTE_RE.search(str(n))]
 
     # 5) 실존·윤리 검증(형식 변환 전에 수행해 발견된 DOI·교정을 반영)
     verify_results = None
