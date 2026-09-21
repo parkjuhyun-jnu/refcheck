@@ -74,6 +74,11 @@ def backfill_from_raw(e: dict) -> dict:
         m = re.search(r"\b10\.\d{4,9}/[^\s\"<>]+", raw)
         if m:
             e["doi"] = m.group(0).rstrip(".,;)")
+    if e.get("type") == "journal" and not (e.get("volume") or "").strip() and (e.get("issue") or "").strip():
+        # 권 없이 통권 번호만 매기는 학술지('국어교육, 170, 81-122') — AI가 그 번호를 호에 넣기도
+        # 하고 권에 넣기도 한다(배치마다 다름). 참고문헌은 그 번호를 권 자리에 쓰므로 권으로
+        # 통일해 형식 변환·KCI 대조·교정 제안이 같은 자리를 보게 한다(2026-09-21 신고: 번호 사라짐)
+        e["volume"], e["issue"] = e["issue"].strip(), ""
     return e
 
 
@@ -334,7 +339,9 @@ def _norm_journal_rest(rest: str) -> str:
     rest = re.sub(r"제?\s*(\d+)\s*권\s*,?\s*제?\s*(\d+)\s*호", r" \1(\2)", rest)
     rest = re.sub(r"제?\s*(\d+)\s*권", r" \1", rest)
     rest = re.sub(r"제?\s*(\d+)\s*집", r" \1", rest)
-    rest = re.sub(r"(\d+)\s*[-–~]\s*(\d+)\s*(쪽|면|p\b)?", r"\1-\2", rest)
+    # 면수 범위만 붙임표로 통일 — 끝자리(면수)에 한정한다. 제목 속 '1~3학년'까지
+    # '1-3학년'으로 바꾸던 문제(2026-09-21 실측)
+    rest = re.sub(r"(\d+)\s*[-–~]\s*(\d+)\s*(?:쪽|면|p\b)?(?=\.?\s*$)", r"\1-\2", rest)
     rest = re.sub(r"(\d)\s*,?\s*\(\s*(\d{1,3})\s*\)", r"\1(\2)", rest)
     rest = re.sub(r"\s{2,}", " ", rest)
     return rest

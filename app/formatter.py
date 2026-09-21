@@ -333,10 +333,16 @@ def format_entry(e: dict) -> str:
         if authors:
             parts.append(f"{title}.")
         seg = container
-        if e.get("volume"):
-            seg += f", {e['volume']}"
-            if e.get("issue"):
-                seg += f"({e['issue']})"
+        vol, iss = (e.get("volume") or "").strip(), (e.get("issue") or "").strip()
+        if not vol and iss:
+            # 권 없이 통권 번호만 매기는 학술지(국어교육 170, 독서연구 59) — 구조화가 그 번호를 호에
+            # 넣으면 권 자리가 비어 번호가 통째로 사라졌다('국어교육, 81-122.' 2026-09-21 신고).
+            # 공통기준 예시 'Advances in Consumer Research, 13, 208-212.'처럼 권 자리에 적는다
+            vol, iss = iss, ""
+        if vol:
+            seg += f", {vol}"
+            if iss:
+                seg += f"({iss})"
         if e.get("pages"):
             seg += f", {e['pages']}"
         elif e.get("article_no"):

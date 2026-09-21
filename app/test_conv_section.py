@@ -365,4 +365,19 @@ ok(len(sg) == 1 and sg[0]["field"] == "doi" and sg[0]["suggested"].endswith(".11
 ok(main_mod2._build_suggestions(dict(e_doi, doi=""), m_doi) == [], "원고에 DOI가 없으면 넣으라고 하지 않음(확인될 경우에만 기입)")
 ok(main_mod2._build_suggestions(dict(e_doi, doi="10.9708/JKSCI.2022.27.04.119"), m_doi) == [], "대소문자만 다른 DOI는 같은 DOI")
 
+# ---------------------------------------------------------------- 11) 통권 번호가 호에 들어간 항목 (2026.09.21-01)
+print("[11] 권 없이 통권 번호만 있는 학술지 — 호에 들어가도 번호가 사라지지 않음")
+e_t = {"type": "journal", "lang": "ko", "authors": ["양수연", "박성석", "민병곤"], "year": "2020",
+       "title": "중학교 1~3학년 읽기 능력 검사 도구 개발 및 IRT 분석을 통한 타당화 연구", "container": "국어교육",
+       "volume": "", "issue": "170", "pages": "81-122", "doi": "10.29401/KLE.170.3",
+       "raw": "양수연, 박성석, 민병곤 (2020). 중학교 1~3학년 읽기 능력 검사 도구 개발 및 IRT 분석을 통한 타당화 연구. 국어교육, 170, 81-122."}
+ok(formatter.format_entry(dict(e_t)).endswith("국어교육, 170, 81-122. https://doi.org/10.29401/KLE.170.3"),
+   "형식 변환: 호에만 있는 번호를 권 자리에 — '국어교육, 81-122.'로 사라지던 문제(2026-09-21 신고)")
+import rules as rules_mod
+n = rules_mod.backfill_from_raw(dict(e_t))
+ok(n["volume"] == "170" and n["issue"] == "", "구조화 뒤 정규화: 호→권으로 옮겨 KCI 대조·제안이 같은 자리를 봄")
+ok(rules_mod.backfill_from_raw(dict(e_t, volume="54", issue="2"))["issue"] == "2", "권·호가 다 있으면 그대로")
+r_t = rules_mod.structure_entry("양수연, 박성석, 민병곤 (2020). 중학교 1~3학년 읽기 능력 검사 도구 개발 및 IRT 분석을 통한 타당화 연구. 국어교육, 170, 81~122.")
+ok("1~3학년" in r_t["title"] and r_t["pages"] == "81-122", "제목 속 '1~3학년'은 그대로, 면수 '81~122'만 붙임표로")
+
 print(f"\n전체 {_PASS}건 통과")
