@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.21-01"
+APP_VERSION = "2026.09.21-02"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -646,6 +646,41 @@ def _tip_applies(tip: dict, item: dict) -> bool:
     return True
 
 
+def _page_bounds(pages: str) -> tuple[int, int] | None:
+    m = re.match(r"\s*(\d+)\s*[-–~]\s*(\d+)\s*$", pages or "")
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    if b < a and len(m.group(2)) < len(m.group(1)):   # '179-91' 같은 축약 표기
+        b = int(m.group(1)[: len(m.group(1)) - len(m.group(2))] + m.group(2))
+    return a, b
+
+
+def _pages_off_by_one(cur: str, new: str) -> bool:
+    """면수 범위가 첫 면 또는 끝 면 한쪽만 1쪽 다른가('179-191' ↔ '180-191')."""
+    a, b = _page_bounds(cur), _page_bounds(new)
+    if not a or not b:
+        return False
+    return (abs(a[0] - b[0]) == 1 and a[1] == b[1]) or (a[0] == b[0] and abs(a[1] - b[1]) == 1)
+
+
+def _page_check_note(entry: dict, meta: dict | None) -> list[str]:
+    """면수 1쪽 차이 비고 — 문편협 기준의 '게재면수'는 발행본에 인쇄된 면이 근거다.
+
+    KCI 등록 면수는 첫 면 번호가 인쇄되지 않은 논문에서 둘째 면부터 잡히는 일이 있어(2026-09-21
+    실측) 1쪽 차이는 등록 오류일 가능성이 커 교정을 강요하지 않는다. 발행본 PDF의 면을 따르라고 안내.
+    """
+    if not meta:
+        return []
+    cur = (entry.get("pages") or "").strip()
+    new = verify_mod.clean_pages((meta.get("pages") or "").strip().replace("–", "-"))
+    if cur and new and _norm_for_compare(cur) != _norm_for_compare(new) and _pages_off_by_one(cur, new):
+        src = meta.get("source") or "등록 서지"
+        return [f"면수 확인: 원고 {cur} / {src} 등록 {new} — 1쪽 차이는 첫 면 번호 미인쇄 등 등록 오류가 "
+                "흔합니다. 발행본(PDF)에 인쇄된 면수를 따르세요(공통기준의 게재면수는 발행본 기준)"]
+    return []
+
+
 def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
     """검증에서 매칭된 정규 서지(meta)와 파싱 결과의 차이 → 필드별 수정 제안."""
     if not meta:
@@ -697,6 +732,12 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
         if f == "degree" and cur and _degree_kind(cur) == _degree_kind(new):
             continue  # '석사학위논문'과 'Master's thesis'처럼 표기 언어만 다른 경우
         if f == "pages" and cur and _norm_for_compare(cur) == _norm_for_compare(new):
+            continue
+        if f == "pages" and cur and _pages_off_by_one(cur, new):
+            # 첫 면(또는 끝 면)만 1쪽 다른 경우 — 첫 면에 쪽 번호가 인쇄되지 않아 DB가 둘째 면부터
+            # 등록한 사례가 흔하다(2026-09-21 실측: 조용구 2023, 발행본 179-191 / KCI 180-191).
+            # 어느 쪽이 맞는지 서지만으로는 알 수 없으므로 교정 제안(자동 교정 대상) 대신
+            # 확인 비고로만 남긴다 — _page_check_note()
             continue
         if f == "pages" and not cur:
             ano = (entry.get("article_no") or "").strip()
@@ -1019,6 +1060,7 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     verify_results = None
     suggestions_by_idx: dict[int, list[dict]] = {}
     autofix_notes_by_idx: dict[int, list[str]] = {}
+    page_notes_by_idx: dict[int, list[str]] = {}
     if options.get("verify"):
         # 가장 오래 걸리는 구간 — 몇 건째 조회 중인지 실시간으로 알린다
         def _verify_progress(done: int, total: int):
@@ -1033,6 +1075,9 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
                 e["doi"] = v["found_doi"]
             _drop_resolved_notes(e, v)
             sugg = _build_suggestions(e, v.get("meta"))
+            pnote = _page_check_note(e, v.get("meta"))
+            if pnote:
+                page_notes_by_idx[i] = pnote
             if sugg:
                 if options.get("autofix"):
                     autofix_notes_by_idx[i] = _apply_suggestions(e, sugg)
@@ -1117,6 +1162,7 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
             issues = (formatter.validate_entry(e)
                       + formatter.lost_elements(e.get("raw", ""), formatted)
                       + autofix_notes_by_idx.get(i, [])
+                      + page_notes_by_idx.get(i, [])
                       + conv_issues_by_idx.get(i, []))
             items.append({
                 "raw": e.get("raw", ""), "formatted": formatted,

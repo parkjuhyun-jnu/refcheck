@@ -128,7 +128,7 @@ footer{max-width:1000px;margin:0 auto 40px;padding:0 18px;font-size:12px;color:v
   <div class="toc" style="margin-top:12px">
     <div><a href="#sum">한눈에 보기 — 쟁점 요약</a></div>
     <div><a href="#gap">Ⅰ. 학회 간 해석이 갈리는 항목 (7건)</a></div>
-    <div><a href="#vague">Ⅱ. 기준 문언이 불명확한 항목 (6건)</a></div>
+    <div><a href="#vague">Ⅱ. 기준 문언이 불명확한 항목 (7건)</a></div>
     <div><a href="#none">Ⅲ. 기준에 조문이 없는 유형 (6건)</a></div>
     <div><a href="#context">Ⅳ. 참고 — 네 학회지의 인용 구성</a></div>
     <div><a href="#method">부록. 실측 방법과 한계</a></div>
@@ -158,6 +158,7 @@ footer{max-width:1000px;margin:0 auto 40px;padding:0 18px;font-size:12px;color:v
     <tr><td>영문 자료명 대소문자</td><td>체크리스트</td><td class="n">—</td><td>유형별 대소문자 규칙</td></tr>
     <tr><td>접속일</td><td>없음</td><td class="n">사실상 0%</td><td>기재 여부</td></tr>
     <tr><td>국문 문헌 영문 표기의 전거</td><td>체크리스트</td><td class="n">—</td><td>어느 표기를 전거로 할지</td></tr>
+    <tr><td>게재면수의 전거 — 발행본인가 서지 DB인가</td><td>Ⅱ.3(1)</td><td class="n">—</td><td>DB 등록값과 다를 때의 우선순위</td></tr>
     <tr><td>프리프린트·데이터셋·AI 등</td><td>없음</td><td class="n">—</td><td>조문 신설 여부</td></tr>
   </table>
   </div>
@@ -373,6 +374,19 @@ footer{max-width:1000px;margin:0 auto 40px;padding:0 18px;font-size:12px;color:v
     <code>doi:10.…</code> 중 어느 것으로 할지.</div>
   <p class="hint">※ 이 항목은 실측 수치를 싣지 않았습니다 — KCI 등록 서지의 DOI는 KCI가 일괄
      <code>dx.doi.org</code> 형식으로 저장하기 때문에, 발행본의 실제 표기를 알 수 없습니다(부록 참조).</p>
+
+  <h3 id="v7">7. 서지 DB의 면수가 발행본과 다를 때 무엇을 따르는가 <span class="badge vague">문언 불명확</span></h3>
+  <p>기준은 학술지 논문의 '게재면수'를 기술요소로 두지만, <b>그 근거가 발행본인지 서지 DB인지</b>는 적지
+     않습니다. 편집 실무에서는 KCI 등록 서지로 면수를 확인하는데, 등록값이 발행본과 어긋나는 사례가
+     있습니다 — 첫 면에 쪽 번호가 인쇄되지 않은 논문을 둘째 면부터 등록하는 경우가 대표적입니다.</p>
+  <div class="ex">조용구 (2023). 컴퓨터 적응 검사를 활용한 독서 능력 평가 시스템의 개발. 한국초등국어교육, 76, 179-191.<span class="src">발행본 PDF: 13면, 둘째 면 머리글 '180', 본문 첫 면 DOI <code>…76.179</code> → 179-191 / KCI 등록: 180-191(12면), 등록 DOI <code>…76.180</code> (2026-09-21 실측)</span></div>
+  <p>같은 논문의 DOI마저 발행본 인쇄본(<code>…76.179</code>, 해석 안 됨)과 등록본(<code>…76.180</code>, 해석됨)이
+     다릅니다. 저자는 발행본을 보고 179-191로 썼고, DB만 보는 교정은 이를 180-191로 '고치라'고 하게 됩니다.</p>
+  <div class="todo"><b>정해야 할 것</b> — 게재면수(및 DOI)의 전거를 <b>발행본에 인쇄된 값</b>으로 명시할 것인가.
+    명시한다면 편집위원회의 서지 확인도 DB 등록값과 1쪽 차이 같은 경계 사례에서는 발행본을 우선하게 됩니다.</div>
+  <p class="hint">※ refcheck는 2026.09.21-02부터 등록 면수와 원고가 첫 면 또는 끝 면 한쪽만 1쪽 다르면
+     교정 제안(자동 교정 대상) 대신 '발행본 면수를 확인하라'는 비고만 붙입니다. 2쪽 이상 다르면 종전대로
+     등록 서지 기준의 교정을 제안합니다.</p>
 </div>
 
 <div class="card" id="none">

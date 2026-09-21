@@ -380,4 +380,19 @@ ok(rules_mod.backfill_from_raw(dict(e_t, volume="54", issue="2"))["issue"] == "2
 r_t = rules_mod.structure_entry("양수연, 박성석, 민병곤 (2020). 중학교 1~3학년 읽기 능력 검사 도구 개발 및 IRT 분석을 통한 타당화 연구. 국어교육, 170, 81~122.")
 ok("1~3학년" in r_t["title"] and r_t["pages"] == "81-122", "제목 속 '1~3학년'은 그대로, 면수 '81~122'만 붙임표로")
 
+# ---------------------------------------------------------------- 12) 면수 1쪽 차이 (2026.09.21-02)
+print("[12] 등록 면수와 원고가 1쪽 다르면 교정 제안 대신 발행본 확인 비고")
+e_p = {"type": "journal", "title": "컴퓨터 적응 검사를 활용한 독서 능력 평가 시스템의 개발", "year": "2023",
+       "volume": "76", "issue": "", "pages": "179-191", "doi": "10.22818/jeke.2023..76.180"}
+m_p = {"source": "KCI", "year": "2023", "volume": "76", "issue": "", "pages": "180-191", "doi": "10.22818/jeke.2023..76.180"}
+ok(main_mod2._build_suggestions(e_p, m_p) == [], "첫 면 1쪽 차이(179-191 ↔ KCI 180-191) → 교정 제안 없음 (조용구 2023 실측)")
+note = main_mod2._page_check_note(e_p, m_p)
+ok(len(note) == 1 and "발행본" in note[0] and "180-191" in note[0], "대신 '발행본 면수를 따르라' 비고")
+ok(main_mod2._build_suggestions(e_p, dict(m_p, pages="181-191")) and not main_mod2._page_check_note(e_p, dict(m_p, pages="181-191")),
+   "2쪽 이상 차이는 종전대로 등록 서지 기준 교정 제안")
+ok(main_mod2._build_suggestions(e_p, dict(m_p, pages="179-192")) == [] and main_mod2._page_check_note(e_p, dict(m_p, pages="179-192")),
+   "끝 면 1쪽 차이도 비고")
+ok(main_mod2._page_check_note(e_p, dict(m_p, pages="179-191")) == [], "같으면 비고 없음")
+ok(main_mod2._pages_off_by_one("179-91", "180-191"), "축약 면수 '179-91'도 179-191로 읽음")
+
 print(f"\n전체 {_PASS}건 통과")
