@@ -395,4 +395,15 @@ ok(main_mod2._build_suggestions(e_p, dict(m_p, pages="179-192")) == [] and main_
 ok(main_mod2._page_check_note(e_p, dict(m_p, pages="179-191")) == [], "같으면 비고 없음")
 ok(main_mod2._pages_off_by_one("179-91", "180-191"), "축약 면수 '179-91'도 179-191로 읽음")
 
+# ---------------------------------------------------------------- 13) KCI 서지 검증 표시 N (2026.09.21-03)
+print("[13] KCI 서지 검증 표시 N — 면수는 교정 근거로 쓰지 않고 원문 보유 정보원 확인 비고")
+e_n = {"type": "journal", "title": "독서 능력 표준화 검사 도구의 연구 개발", "year": "2006", "volume": "15", "issue": "", "pages": "407-436"}
+m_n = {"source": "KCI", "year": "2006", "volume": "15", "issue": "", "pages": "425-456", "kci_verified": "N"}
+ok(main_mod2._build_suggestions(e_n, m_n) == [], "검증 N: 18쪽 차이여도 교정 제안 없음 (천경록 2006 실측 — 발행본·KISS 407-436)")
+n13 = main_mod2._page_check_note(e_n, m_n)
+ok(len(n13) == 1 and "검증 표시가 N" in n13[0] and "425-456" in n13[0], "비고에 KCI 등록값과 원문 보유 정보원 확인 안내")
+ok(len(main_mod2._build_suggestions(e_n, dict(m_n, kci_verified="Y"))) == 1, "검증 Y이고 2쪽 이상 차이면 종전대로 제안")
+ok(main_mod2._build_suggestions(dict(e_n, volume="14"), m_n) and main_mod2._build_suggestions(dict(e_n, volume="14"), m_n)[0]["field"] == "volume",
+   "검증 N이어도 권·호 등 다른 요소는 제안(면수만 보류)")
+
 print(f"\n전체 {_PASS}건 통과")

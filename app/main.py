@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.21-02"
+APP_VERSION = "2026.09.21-03"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -674,8 +674,14 @@ def _page_check_note(entry: dict, meta: dict | None) -> list[str]:
         return []
     cur = (entry.get("pages") or "").strip()
     new = verify_mod.clean_pages((meta.get("pages") or "").strip().replace("–", "-"))
-    if cur and new and _norm_for_compare(cur) != _norm_for_compare(new) and _pages_off_by_one(cur, new):
-        src = meta.get("source") or "등록 서지"
+    if not (cur and new) or _norm_for_compare(cur) == _norm_for_compare(new):
+        return []
+    src = meta.get("source") or "등록 서지"
+    if meta.get("kci_verified") == "N":
+        return [f"면수 확인: 원고 {cur} / KCI 등록 {new} — KCI 서지 검증 표시가 N(원문 대조 미검증)이라 등록값을 "
+                "교정 근거로 쓰지 않았습니다. 원문을 보유한 정보원(RISS 레코드 → 원문보기, KISS 등)이나 발행본의 "
+                "면수를 따르세요(공통기준의 게재면수는 발행본 기준)"]
+    if _pages_off_by_one(cur, new):
         return [f"면수 확인: 원고 {cur} / {src} 등록 {new} — 1쪽 차이는 첫 면 번호 미인쇄 등 등록 오류가 "
                 "흔합니다. 발행본(PDF)에 인쇄된 면수를 따르세요(공통기준의 게재면수는 발행본 기준)"]
     return []
@@ -732,6 +738,10 @@ def _build_suggestions(entry: dict, meta: dict | None) -> list[dict]:
         if f == "degree" and cur and _degree_kind(cur) == _degree_kind(new):
             continue  # '석사학위논문'과 'Master's thesis'처럼 표기 언어만 다른 경우
         if f == "pages" and cur and _norm_for_compare(cur) == _norm_for_compare(new):
+            continue
+        if f == "pages" and cur and meta.get("kci_verified") == "N":
+            # KCI가 원문과 대조하지 않은 등록값 — 발행본과 18쪽이나 어긋난 사례(천경록 2006).
+            # 교정 근거로 쓰지 않고 _page_check_note()가 확인 비고를 붙인다
             continue
         if f == "pages" and cur and _pages_off_by_one(cur, new):
             # 첫 면(또는 끝 면)만 1쪽 다른 경우 — 첫 면에 쪽 번호가 인쇄되지 않아 DB가 둘째 면부터

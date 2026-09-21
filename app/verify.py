@@ -479,6 +479,8 @@ def _meta_from_kr(m: dict) -> dict:
         # 없으면 빈 값이라 KCI·SEOJI·NANET 적중의 화면·교정 제안은 달라지지 않는다.
         "url": m.get("url", ""),
         "institution": m.get("institution", ""), "degree": m.get("degree", ""),
+        # KCI 서지 검증 표시(Y/N) — N이면 면수 등 등록값을 교정 근거로 쓰지 않는다(main._page_check_note)
+        "kci_verified": m.get("kci_verified", ""),
         "source": m.get("source", ""),
     }
 
@@ -737,6 +739,8 @@ def _kci_fill_detail(client: httpx.Client, kci: dict) -> tuple[str, bool]:
             for f in ("doi", "pages"):
                 if detail.get(f) and not kci.get(f):
                     kci[f] = detail[f]
+            if detail.get("verified"):
+                kci["kci_verified"] = detail["verified"]
     return reg, err
 
 
@@ -1053,6 +1057,8 @@ def verify_entry(client: httpx.Client, entry: dict) -> dict:
             if kr.get("isbn"):
                 # 같은 서명의 다른 판과 헷갈릴 때 이용자가 손으로 확인할 수 있는 유일한 값
                 detail += f" · ISBN {kr['isbn']}"
+            if kr.get("kci_verified") == "N":
+                detail += " · KCI 서지 검증 표시 N(원문 대조 미검증 — 면수 등은 발행본으로 확인)"
             if kr.get("note"):
                 detail += f" · {kr['note']}"   # 카카오 책: 다른 판만 수록 등 판정 단서
             if xref:

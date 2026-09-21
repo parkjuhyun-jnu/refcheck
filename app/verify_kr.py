@@ -282,6 +282,9 @@ def kci_article_detail(client: httpx.Client, article_id: str) -> dict | None:
         "container": g(".//journal-name"),
         "doi": _bare_doi(g(".//doi")),
         "pages": "-".join(x for x in (g(".//fpage"), g(".//lpage")) if x),
+        # KCI의 서지 검증 표시(Y/N) — N이면 KCI가 원문과 대조하지 않은 등록값이다. 면수가 발행본과
+        # 크게 어긋난 사례(천경록 2006: KCI 425-456, 발행본·KISS 407-436)가 이 부류(2026-09-21 실측)
+        "verified": g(".//verified"),
     }
     if not any(out.values()):
         return None
