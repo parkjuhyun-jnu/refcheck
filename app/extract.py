@@ -124,6 +124,23 @@ def _looks_like_continuation(line: str) -> bool:
     return any(p.match(line) for p in _CONT_PATTERNS)
 
 
+_STRONG_START = re.compile(r"^.{0,60}?[\((]\s*(?:18|19|20)\d{2}[a-z]?\s*[\))]")
+_LAW_START = re.compile(r"^[가-힣·\s]{2,30}(?:법|시행령|시행규칙|조례|규칙)\s*[\.。]?\s*"
+                        r"(?:법률|대통령령|교육부령|총리령|조례)?\s*제\s*\d+\s*호"
+                        r"|^[A-Z][A-Za-z\-' ]{2,90}(?:Act|Decree|Ordinance|Rule|Regulation)s?\.\s*"
+                        r"(?:Act|Decree|Presidential Decree)?\s*No\.")
+
+
+def _is_strong_start(s: str) -> bool:
+    """이 줄이 '틀림없이 새 항목'인가 — 앞 60자 안에 (연도)가 있거나 법령 항목 꼴.
+
+    PDF에서 한 항목이 여러 줄로 접히면 둘째 줄이 '의도, 정보공유의도에…'·'학회지, 57(3), 303-323.'
+    처럼 저자 나열이나 수록지처럼 보여 새 항목으로 잘렸다(2026-09-23 실측). 접힌 줄에는 (연도)가
+    없다는 점을 기준으로 삼는다.
+    """
+    return bool(_STRONG_START.match(s) or _LAW_START.match(s))
+
+
 def _looks_like_start(s: str) -> bool:
     """새 문헌 항목의 시작으로 보이는 줄인지 판정."""
     if re.match(r"^\[\d{1,3}\]\s*\S", s) or re.match(r"^\d{1,3}[\.\)]\s+\S", s):
@@ -174,7 +191,10 @@ def split_entries(section_text: str) -> list[str]:
             continue
         if _is_conv_heading_line(raw_line):
             continue  # 영문 변환 소절 표제 줄 — 문헌이 아니다(직전 항목에 붙지 않게)
-        if cur and _looks_like_continuation(raw_line):
+        # 직전 줄이 문장부호 없이 끝났으면 접힌 줄이다 — 다음 줄이 '틀림없는 새 항목'이 아닌 한 이어 붙인다
+        prev_open = bool(cur) and not re.search(r"[.。?!」』\]\)]\s*$", cur[-1])
+        if cur and (_looks_like_continuation(raw_line)
+                    or (prev_open and not _is_strong_start(s))):
             cur.append(s)
         elif _looks_like_start(s):
             if cur:

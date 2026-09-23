@@ -6,3 +6,4 @@ pypdf
 hwpkit
 httpx
 anthropic
+pymupdf

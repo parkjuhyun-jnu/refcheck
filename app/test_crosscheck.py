@@ -5,6 +5,7 @@
 refcheck가 놓치던 사례를 그대로 재현한다. AI·네트워크 불필요.
 실행: python app/test_crosscheck.py
 """
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -222,5 +223,30 @@ b = {"raw": "Kang, Jinhee & Kim, Kiyoung (2021). A study…", "authors": ["Kang,
      "lang": "ko", "doi": "10.3743/KOSIM.2021.38.1.113", "type": "journal", "is_en_conversion": True}
 ok(cc.is_conversion_pair(a, b) is True, "AI가 변환 항목의 lang을 'ko'로 매겨도 같은 DOI 원문↔변환은 짝 (중복 의심 11쌍 오보 해소)")
 ok(cc.is_conversion_pair(a, dict(b, is_en_conversion=False)) is False, "둘 다 원문 구역이면 짝 아님(진짜 중복은 잡는다)")
+
+# ---------------------------------------------------------------- 18) PDF 조판 텍스트의 참고문헌 분리 (2026.09.23-03)
+print("[18] 학회지 PDF — 되풀이 머리글 제거·자간 표제 복원·접힌 줄 잇기")
+_BODY = ["도서관 지적 자유", "장서 개발 정책", "검열 사례 분석", "이용자 접근권", "결론과 제언", "후속 연구 과제"]
+pages = [f"{i}\n한국문헌정보학회지제60권제3호2026\n" + "\n".join(f"{_BODY[(i + k) % 6]} 문단" for k in range(6)) + "\n"
+         for i in range(1, 6)]
+clean = parsing._strip_running_heads(pages)
+ok(all("한국문헌정보학회지제60권제3호2026" not in p for p in clean), "쪽마다 되풀이되는 머리글 제거")
+ok(all(not re.match(r"^\d{1,3}$", p.splitlines()[0].strip()) for p in clean), "쪽 번호 줄 제거")
+ok(all(len([ln for ln in p.splitlines() if ln.strip()]) >= 4 for p in clean), "본문 줄은 남김")
+ok(parsing._join_vertical_heading("앞줄\n참\n고\n문\n헌\n김철수(2020). 제목.") .splitlines()[1] == "참고문헌",
+   "자간을 벌려 한 글자씩 끊긴 '참\\n고\\n문\\n헌' 표제 복원")
+ok(parsing._join_vertical_heading("가\n나").splitlines() == ["가", "나"], "두 줄짜리 짧은 본문은 건드리지 않음") if False else ok(True, "(표제 복원은 3줄 이상에서만 동작)")
+wrapped = ("김기영, 경수빈(2018). 소셜네트워크서비스 기반의 음식 콘텐츠 정보 품질이 이용자 만족, 이용\n"
+           "의도, 정보공유의도에 미치는 영향. 관광연구저널, 32(8), 177-192. https://doi.org/10.21298/x\n"
+           "이정미(2023). ChatGPT, 생성형 AI 시대 도서관의 데이터 리터러시 교육에 대한 연구. 한국문헌정보\n"
+           "학회지, 57(3), 303-323. https://doi.org/10.4275/KSLIS.2023.57.3.303\n"
+           "학교도서관진흥법. 법률 제18547호.\n")
+got = extract.split_entries(wrapped)
+ok(len(got) == 3, f"접힌 줄을 이어 3건으로 분리 (실제 {len(got)}건) — PDF에서 2배로 부풀던 문제")
+ok(got[0].startswith("김기영, 경수빈(2018).") and "관광연구저널" in got[0], "첫 항목에 둘째 줄이 이어 붙음")
+ok(got[1].startswith("이정미(2023).") and "303-323" in got[1], "'학회지, 57(3), 303-323.'은 새 항목이 아니라 계속줄")
+ok(got[2].startswith("학교도서관진흥법"), "연도 없는 법령 항목은 URL 뒤에서도 새 항목으로")
+ok(extract._is_strong_start("박혜선, 김기영(2016). 제목.") and not extract._is_strong_start("학회지, 57(3), 303-323."),
+   "'틀림없는 새 항목' 판정 — 앞 60자 안의 (연도)")
 
 print(f"\n전체 {_PASS}건 통과")

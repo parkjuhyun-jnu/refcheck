@@ -190,22 +190,86 @@ def _hwpx_paragraphs(root) -> list[str]:
     return out
 
 
-def _parse_pdf(data: bytes) -> str:
+def _pdf_pages(data: bytes) -> list[str]:
+    """PDF → 쪽별 텍스트. PyMuPDF가 있으면 그쪽을 먼저 쓴다.
+
+    학회지 PDF(한글에서 만든 2단 조판)에서 pypdf는 줄바꿈을 잃어 참고문헌이 한 덩어리로
+    붙어 나온다 — 항목 분리가 무너져 25건이 2건으로 잡힌다(2026-09-23 실측: 한국문헌정보학회지·
+    비블리아·정보관리학회지). PyMuPDF는 줄바꿈과 구두점 뒤 공백을 지켜 항목이 제대로 나뉜다.
+    설치돼 있지 않거나 실패하면 종전처럼 pypdf로 간다.
+    """
+    try:
+        import fitz  # PyMuPDF
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            pages = [(p.get_text() or "") for p in doc]
+        if len(re.sub(r"\s", "", "".join(pages))) >= 30:
+            return pages
+    except Exception:
+        pass
     try:
         from pypdf import PdfReader
     except ImportError:
-        raise ParseError("pypdf가 설치되어 있지 않습니다. (pip install pypdf)")
+        raise ParseError("PDF를 읽을 수 있는 라이브러리가 없습니다. (pip install pymupdf pypdf)")
     try:
         reader = PdfReader(io.BytesIO(data))
     except Exception:
         raise ParseError("PDF 파일을 열 수 없습니다.")
-    pages = []
+    out = []
     for page in reader.pages:
         try:
-            pages.append(page.extract_text() or "")
+            out.append(page.extract_text() or "")
         except Exception:
-            pages.append("")
-    text = "\n".join(pages)
+            out.append("")
+    return out
+
+
+_PAGE_NUM_RE = re.compile(r"^[\-–—\s]*\d{1,4}[\-–—\s]*$")
+
+
+def _strip_running_heads(pages: list[str]) -> list[str]:
+    """쪽마다 되풀이되는 머리글·꼬리글과 쪽 번호를 걷어낸다.
+
+    학회지 PDF는 쪽마다 '한국문헌정보학회지제60권제3호2026'과 쪽 번호가 붙는데, 이것이
+    참고문헌 사이에 끼어들어 바로 뒤 항목의 저자명에 달라붙는다(2026-09-23 실측).
+    여러 쪽에 같은 꼴로 나타나는 줄만 지우므로 본문은 건드리지 않는다.
+    """
+    if len(pages) < 3:
+        return pages
+    edge = []
+    for p in pages:
+        lines = [ln.strip() for ln in p.splitlines() if ln.strip()]
+        edge += lines[:2] + lines[-2:]
+    norm = lambda s: re.sub(r"\d+", "#", s)
+    freq: dict[str, int] = {}
+    for ln in edge:
+        freq[norm(ln)] = freq.get(norm(ln), 0) + 1
+    repeat = {k for k, n in freq.items() if n >= max(3, int(len(pages) * 0.4))}
+    out = []
+    for p in pages:
+        lines = p.splitlines()
+        n = len(lines)
+        if n < 5:                      # 짧은 쪽(표지·속지)은 손대지 않는다 — 본문까지 지울 위험
+            out.append(p)
+            continue
+        keep = []
+        for i, ln in enumerate(lines):
+            s = ln.strip()
+            if s and (i < 2 or i >= n - 2) and (norm(s) in repeat or _PAGE_NUM_RE.match(s)):
+                continue               # 후보를 모은 자리(위·아래 두 줄)에서만 지운다
+            keep.append(ln)
+        out.append("\n".join(keep))
+    return out
+
+
+def _join_vertical_heading(text: str) -> str:
+    """'참\\n고\\n문\\n헌'처럼 한 글자씩 끊긴 표제를 한 줄로 되돌린다(자간을 벌린 표제)."""
+    return re.sub(r"(?m)^(?:[가-힣A-Za-z]\n){2,}[가-힣A-Za-z]$",
+                  lambda m: m.group(0).replace("\n", ""), text)
+
+
+def _parse_pdf(data: bytes) -> str:
+    pages = _strip_running_heads(_pdf_pages(data))
+    text = _join_vertical_heading("\n".join(pages))
     if len(re.sub(r"\s", "", text)) < 30:
         raise ParseError("PDF에서 텍스트를 추출할 수 없습니다. 스캔본 PDF라면 OCR 처리 후 다시 시도해 주세요.")
     return text
