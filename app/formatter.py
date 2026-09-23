@@ -244,9 +244,13 @@ def title_case(s: str) -> str:
     return " ".join(out)
 
 
-def sentence_case(s: str) -> str:
+def sentence_case(s: str, subtitle: str = "lower") -> str:
     """서양 논문명: 첫 글자만 대문자. 약어·고유명사(내부 대문자 연속어)는 유지.
-    이미 소문자 위주면 그대로 두고, Title Case 로 판단될 때만 변환."""
+    이미 소문자 위주면 그대로 두고, Title Case 로 판단될 때만 변환.
+
+    subtitle="lower"(기본, 문편협 공통기준)는 콜론 뒤 부제의 첫 낱말을 소문자로,
+    subtitle="upper"는 대문자로 맞춘다 — 학회가 따로 정한 경우(ORG_SUBTITLE_CASE) 쓴다.
+    """
     if not s or not re.search(r"[A-Za-z]", s):
         return s
     words = s.split()
@@ -266,10 +270,15 @@ def sentence_case(s: str) -> str:
             else:
                 out.append(w.lower())
         s = " ".join(out)
-        # 물음표·느낌표 뒤는 새 문장이므로 대문자. 콜론 뒤 부제는 위에서 이미 소문자
+        # 물음표·느낌표 뒤는 새 문장이므로 대문자
         s = re.sub(r"([?!]\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
-        return s
-    s = s[0].upper() + s[1:] if s[0].isalpha() else s
+        if subtitle != "upper":
+            return s
+    else:
+        s = s[0].upper() + s[1:] if s[0].isalpha() else s
+    if subtitle == "upper":
+        # 부제 첫 낱말을 대문자로 — 한국도서관·정보학회지 57권 2호부터의 규정(ORG_SUBTITLE_CASE)
+        return re.sub(r"(:\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), s)
     # 콜론 뒤 부제의 첫 낱말은 소문자 — 학회 오류유형 안내 1.2 '콜론(:) 뒤에 이어지는 부제를
     # 포함한 나머지 단어는 소문자로 유지'(예: A study on digital libraries: user behavior analysis),
     # 공통기준 Ⅱ-1)(5)·6) 예시 'Recent trends in user studies: action research and …'도 같다.
@@ -284,6 +293,16 @@ def sentence_case(s: str) -> str:
         return m.group(0)
     s = re.sub(r"(:\s+)([A-Z][A-Za-z'’\-]*)", _lower_sub, s)
     return s
+
+
+# 학회별 부제 대소문자 관행 — 문편협 공통기준(기본)은 부제 첫 낱말을 소문자로 두지만,
+# 한국도서관·정보학회지는 57권 2호(2026년 6월)부터 참고문헌 부제의 첫 낱말도 대문자로 적는다
+# (편집 담당 조은글터 안내, 2026-09-23 이용자 전달). 다른 세 학회지는 종전대로 소문자.
+ORG_SUBTITLE_CASE = {"한국도서관정보학회": "upper"}
+
+
+def subtitle_case_for(org: str) -> str:
+    return ORG_SUBTITLE_CASE.get((org or "").strip(), "lower")
 
 
 # Title Case에서도 소문자로 남는 기능어 — Title Case 판정에서 제외
@@ -313,8 +332,12 @@ _SUBTITLE_COMMON = {
 
 # ---------------------------------------------------------------- 형식 변환
 
-def format_entry(e: dict) -> str:
-    """구조화된 문헌 → 문편협 기준 참고문헌 문자열."""
+def format_entry(e: dict, org: str = "") -> str:
+    """구조화된 문헌 → 문편협 기준 참고문헌 문자열.
+
+    org를 주면 그 학회지의 편집 관행(ORG_SUBTITLE_CASE)을 얹는다 — 기본 형식은 네 학회가 같다.
+    """
+    sub_case = subtitle_case_for(org)
     # 구조화가 아무것도 못 건진 항목(제목·저자·수록지 전부 없음)은 빈 껍데기
     # '. (발행년불명).'을 만들지 않고 원문을 그대로 돌려준다 — 어떤 문헌인지
     # 알아볼 수 있어야 '확인 필요' 표시도 의미가 있다.
@@ -336,7 +359,7 @@ def format_entry(e: dict) -> str:
     container = (e.get("container") or "").strip().rstrip(".,")
     if west:
         if t == "journal":
-            title = sentence_case(title)
+            title = sentence_case(title, sub_case)
             container = title_case(container)
         elif t in ("book", "report", "thesis"):
             # 단독으로 간행되는 저작의 서명은 Title Case(공통기준 Ⅱ-1)(5)).
@@ -348,7 +371,7 @@ def format_entry(e: dict) -> str:
         elif t in ("newspaper", "conference", "web"):
             # 전자자원의 자원명은 문장식, 웹사이트명은 Title Case — 공통기준 6)전자자원 예시
             # 'McCombes, S. (2020, June 25). How to write a literature review. Scribbr.'
-            title = sentence_case(title)
+            title = sentence_case(title, sub_case)
             container = title_case(container)
 
     head_date = f"({date})." if date and t in ("newspaper", "web", "conference", "interview", "av") else f"({year})."

@@ -81,7 +81,7 @@ app = FastAPI(title="참고문헌 검증 서비스",
 # 화면(index.html)과 프로그램의 버전이 어긋난 채 배포되면 새 기능이 조용히 무시된다.
 # 두 파일에 같은 값을 두고 /api/status에서 대조해 관리자 화면에 경고를 띄운다.
 # 기능을 추가·변경할 때 main.py와 index.html의 APP_VERSION을 함께 올릴 것.
-APP_VERSION = "2026.09.21-06"
+APP_VERSION = "2026.09.23-01"
 
 APP_DIR = Path(__file__).parent
 JOBS: dict[str, dict] = {}
@@ -975,6 +975,8 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
         result["error"] = "선택한 참고문헌 작성 기준을 찾을 수 없습니다."
         return result
     result["style_name"] = style["name"]
+    # 학회지별 편집 관행(부제 대소문자 등)을 재조회·이력 재표시에서도 같게 쓰기 위해 결과에 싣는다
+    result["org"] = options.get("org", "")
     builtin = bool(style.get("builtin"))
     directives = feedback_mod.directives_for(style["id"])
     # 이용자가 관리자 추가 규칙(추가 기준·편집 지침) 적용을 끈 경우
@@ -1173,11 +1175,18 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
     progress("형식 변환·정렬", filename)
     items: list[dict] = []
     if builtin:
+        # 학회지별 편집 관행(부제 대소문자 등)을 형식 변환에 얹는다 — 기본 형식은 네 학회가 같다
+        org = options.get("org", "")
+        if formatter.subtitle_case_for(org) == "upper":
+            result["warnings"].append(
+                "한국도서관·정보학회지 관행 적용: 영문 제목의 부제(콜론 뒤) 첫 낱말을 대문자로 맞췄습니다 "
+                "— 57권 2호부터 바뀐 규정(편집 담당 조은글터 안내). 문편협 공통기준의 체크리스트는 "
+                "'부제 소문자'이므로 다른 학회지에 내실 때는 소문자로 되돌려 주세요.")
         order = formatter.sort_and_disambiguate(entries)
         idx_of = {id(e): i for i, e in enumerate(entries)}
         for e in order:
             i = idx_of[id(e)]
-            formatted = formatter.format_entry(e)
+            formatted = formatter.format_entry(e, org)
             issues = (formatter.validate_entry(e)
                       + formatter.lost_elements(e.get("raw", ""), formatted)
                       + autofix_notes_by_idx.get(i, [])
@@ -1368,7 +1377,8 @@ def _process_file(filename: str, data: bytes, options: dict, progress) -> dict:
                 result["warnings"].append(f"영문 변환 실패({ex})")
         elif ko_entries and any(e.get("is_en_conversion") for e in entries):
             # AI가 없어도 원고가 병기한 변환 표기가 있으면 그것을 형식만 다듬어 목록으로 쓴다
-            pairs = sorted(({"formatted": formatter.format_entry(e), "raw": e.get("raw", "")}
+            pairs = sorted(({"formatted": formatter.format_entry(e, options.get("org", "")),
+                             "raw": e.get("raw", "")}
                             for e in entries if e.get("is_en_conversion")),
                            key=lambda p: formatter.en_line_sort_key(p["formatted"]))
             lines = [p["formatted"] for p in pairs]
@@ -2300,7 +2310,7 @@ def reverify_item(job_id: str, request: Request, file_idx: int = Form(...),
         if res.get("style_name") == styles_mod.BUILTIN_STYLE["name"]:
             e2 = dict(it["entry"])
             e2["type"] = it.get("type", "")
-            nf = formatter.format_entry(e2)
+            nf = formatter.format_entry(e2, res.get("org", ""))
             if nf:
                 it["formatted"] = nf
                 it["changed"] = _norm_for_compare(it.get("raw")) != _norm_for_compare(nf)

@@ -444,4 +444,29 @@ ok(lr.search("원문이 한국어로 작성된 논문의 영문 제목일 가능
 ok(lr.search("국문 문헌의 로마자 표기일 가능성, 확인 필요") is not None, "로마자 표기 의심도 인식")
 ok(lr.search("DOI 확인 필요") is None and lr.search("수여기관 확인 필요") is None, "다른 확인 메모는 그대로")
 
+# ---------------------------------------------------------------- 17) 학회별 부제 대소문자 (2026.09.23-01)
+print("[17] 한국도서관·정보학회지 57권 2호부터 — 부제 첫 낱말 대문자")
+sc17 = formatter.sentence_case
+up = formatter.subtitle_case_for("한국도서관정보학회")
+ok(up == "upper" and formatter.subtitle_case_for("한국비블리아학회") == "lower" and formatter.subtitle_case_for("") == "lower",
+   "학회별 부제 규칙 — 도서관정보학회만 대문자")
+ok(sc17("Measuring attitude toward reading: a new tool for teachers", up)
+   == "Measuring attitude toward reading: A new tool for teachers", "원고가 소문자로 적었어도 대문자로 (조은글터 안내 2026-09-23)")
+ok(sc17("Why school librarians matter: What years of research tell us", up)
+   == "Why school librarians matter: What years of research tell us", "이미 대문자면 그대로")
+ok(sc17("Digital Library Research: Current Developments And Trends", up)
+   == "Digital library research: Current developments and trends", "Title Case 원고도 부제 첫 낱말만 대문자로 남김")
+ok(sc17("Measuring attitude toward reading: a new tool for teachers", "lower")
+   == "Measuring attitude toward reading: a new tool for teachers", "다른 학회는 종전대로 소문자(공통기준 체크리스트)")
+e17 = {"type": "journal", "lang": "west", "authors": ["Lance, K. C.", "Kachel, D. E."], "year": "2018",
+       "title": "Why school librarians matter: what years of research tell us", "container": "Phi Delta Kappan",
+       "volume": "99", "issue": "7", "pages": "15-20", "doi": "10.1177/0031721718767854"}
+ok("matter: What years" in formatter.format_entry(dict(e17), "한국도서관정보학회"), "format_entry(org) — 도서관정보학회 원고")
+ok("matter: what years" in formatter.format_entry(dict(e17), "한국문헌정보학회"), "format_entry(org) — 다른 학회 원고")
+ok("matter: what years" in formatter.format_entry(dict(e17)), "org 없이 부르면 공통기준(소문자)")
+b17 = {"type": "book", "lang": "west", "authors": ["Rubin, R. E."], "year": "2010",
+       "title": "Foundations of Library and Information Science", "place": "New York", "publisher": "Neal-Schuman"}
+ok(formatter.format_entry(dict(b17), "한국도서관정보학회") == formatter.format_entry(dict(b17)),
+   "단행본 서명은 Title Case라 학회 관행의 영향 없음")
+
 print(f"\n전체 {_PASS}건 통과")
