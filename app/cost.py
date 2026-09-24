@@ -18,16 +18,16 @@ COST_LOG_PATH = APP_DIR / "api_cost_log.json"
 _LOCK = threading.Lock()
 _LOCAL = threading.local()
 
-# 100만 토큰당 미국 달러 (input, output) — 2026-08 기준 공개 정가
+# 100만 토큰당 미국 달러 (input, output) — 2026-09-25 공개 가격표 확인
 PRICES = {
     "claude-opus-5": (5.0, 25.0),
-    "claude-sonnet-5": (3.0, 15.0),
+    "claude-sonnet-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),
 }
 # 한시 도입가 — 기간 안에는 이 단가가 적용된다. (모델: (input, output, 종료일))
-INTRO_PRICES = {
-    "claude-sonnet-5": (2.0, 10.0, "2026-08-31"),
-}
+# Sonnet 5의 도입가($2/$10)는 2026-08-31 종료 예정이었으나 인상이 취소되어 정가가 됐다.
+# 출시 이후 줄곧 같은 단가이므로 과거 날짜도 PRICES로 환산하면 맞는다(2026-09-25 확인).
+INTRO_PRICES: dict[str, tuple[float, float, str]] = {}
 DEFAULT_PRICE = (5.0, 25.0)
 CACHE_READ_RATE = 0.1    # 캐시 읽기는 입력 단가의 0.1배
 CACHE_WRITE_RATE = 1.25  # 캐시 쓰기는 입력 단가의 1.25배
