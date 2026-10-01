@@ -66,8 +66,10 @@ def _s(x) -> str:
 
 
 def _pages(p) -> str:
-    p = _s(p).replace("–", "-").replace("—", "-")
-    return "" if p in ("-", "0", "0-0") else p
+    # KCI는 논문 번호·첫 면만 있는 면수를 '101153-'처럼 끝에 붙임표를 달아 등록한다(183건).
+    # 원고였다면 '101153'이라 refcheck가 '붙임표를 빼라'고 할 일이 없으므로 여기서 걷어낸다
+    p = _s(p).replace("–", "-").replace("—", "-").strip("- ")
+    return "" if p in ("", "0", "0-0") else p
 
 
 def _doi(d) -> str:
@@ -215,46 +217,77 @@ def _trim(x, depth: int = 0):
     return x
 
 
-def audit_article(slug: str, art: dict) -> list[dict]:
-    fields = art.get("ref_fields") or art.get("refs_fields") or art.get("refs_raw") or []
-    org = JOURNALS[slug][1]
+def judge(slug: str, e: dict, v: dict) -> dict:
+    """조회 결과 v로 교정 제안·형식 층을 계산한다.
+
+    조회 단계(audit_article)·재계산(--recompute)·재생 도구(audit_replay)가 모두 이 함수를 써서
+    셋의 판정이 어긋나지 않게 한다. 운영과 같은 순서다(main._process_file 5·6단계).
+    """
+    sugg, pnote = [], []
+    if v.get("status") == "verified":
+        if v.get("found_doi") and not e.get("doi"):
+            e["doi"] = v["found_doi"]
+        sugg = main._build_suggestions(e, v.get("meta"))
+        pnote = main._page_check_note(e, v.get("meta"))
+    formatted = formatter.format_entry(e, JOURNALS[slug][1])
+    issues = formatter.validate_entry(e) + formatter.lost_elements(e.get("raw", ""), formatted)
+    loss = field_loss(e, formatted)
+    st, det = v.get("status", ""), v.get("detail") or ""
+    flags, note = [], ""
+    if st == "skipped":
+        # refcheck가 '틀렸다'고 한 것이 아니다 — 오판 후보에서 빼고 따로 센다
+        note = "retry" if ("일시 오류" in det or "조회 실패" in det) else "not_checked"
+    elif st not in ("verified", "link_ok"):
+        flags.append("status:" + st)
+    flags += ["suggest:" + s.get("field", "?") for s in sugg]
+    flags += ["page_note"] if pnote else []
+    flags += ["issue"] * bool(issues)
+    flags += ["loss:" + x for x in loss]
+    return {"entry": _trim({k: x for k, x in e.items() if k != "notes"}),
+            "sugg": sugg, "pnote": pnote, "issues": issues, "loss": loss,
+            "formatted": formatted, "flags": flags, "note": note}
+
+
+def build_entries(fields: list[dict]) -> list[dict]:
     entries = [to_entry(f) for f in fields]
     mark_conversions(entries)
     for e in entries:
         rules.backfill_from_raw(e)
+    return entries
+
+
+def audit_article(slug: str, art: dict) -> list[dict]:
+    fields = art.get("ref_fields") or art.get("refs_fields") or art.get("refs_raw") or []
+    entries = build_entries(fields)
     vres = verify_mod.verify_entries(entries)
     rows = []
     for i, (f, e, v) in enumerate(zip(fields, entries, vres)):
-        sugg, pnote = [], []
-        if v.get("status") == "verified":       # 운영과 같은 조건(main._process_file 5단계)
-            if v.get("found_doi") and not e.get("doi"):
-                e["doi"] = v["found_doi"]
-            sugg = main._build_suggestions(e, v.get("meta"))
-            pnote = main._page_check_note(e, v.get("meta"))
-        formatted = formatter.format_entry(e, org)
-        issues = formatter.validate_entry(e) + formatter.lost_elements(e.get("raw", ""), formatted)
-        loss = field_loss(e, formatted)
-        st, det = v.get("status", ""), v.get("detail") or ""
-        flags, note = [], ""
-        if st == "skipped":
-            # refcheck가 '틀렸다'고 한 것이 아니다 — 오판 후보에서 빼고 따로 센다
-            note = "retry" if ("일시 오류" in det or "조회 실패" in det) else "not_checked"
-        elif st not in ("verified", "link_ok"):
-            flags.append("status:" + st)
-        flags += ["suggest:" + s.get("field", "?") for s in sugg]
-        flags += ["page_note"] if pnote else []
-        flags += ["issue"] * bool(issues)
-        flags += ["loss:" + x for x in loss]
+        vt = _trim({k: v.get(k) for k in ("status", "source", "detail", "found_doi",
+                                          "journal", "retraction", "meta")})
         rows.append({
             "j": slug, "art": art.get("kci_id", ""), "art_title": (art.get("title") or "")[:120],
             "vol": art.get("volume", ""), "iss": art.get("issue", ""), "i": i,
-            "kci": _trim(f), "entry": _trim({k: v2 for k, v2 in e.items() if k != "notes"}),
-            "v": _trim({k: v.get(k) for k in ("status", "source", "detail", "found_doi",
-                                              "journal", "retraction", "meta")}),
-            "sugg": sugg, "pnote": pnote, "issues": issues, "loss": loss,
-            "formatted": formatted, "flags": flags, "note": note,
+            "kci": _trim(f), "v": vt, **judge(slug, e, vt),
         })
     return rows
+
+
+def recompute(rows: list[dict]) -> list[dict]:
+    """조회는 그대로 두고 항목 구성(KCI 필드 → refcheck 항목)과 판정만 지금 코드로 다시 한다.
+
+    하네스의 필드 매핑을 고쳤을 때 7,911건을 다시 조회하지 않으려고 둔다. 조회 단계에서
+    검증에 넘긴 항목과 미세하게 달라질 수 있으나(예: 면수 끝 붙임표), 짝짓기·판정에 쓰이는
+    제목·저자·연도는 그대로라 조회 결과는 유효하다.
+    """
+    by_art = defaultdict(list)
+    for r in rows:
+        by_art[(r["j"], r["art"])].append(r)
+    out = []
+    for (slug, _art), rs in by_art.items():
+        rs.sort(key=lambda r: r["i"])
+        for r, e in zip(rs, build_entries([r["kci"] for r in rs])):
+            out.append({**r, **judge(slug, e, r["v"])})
+    return out
 
 
 # ---------------------------------------------------------------- 요약
@@ -285,6 +318,33 @@ def summarize(rows: list[dict]) -> str:
     L += [f"| {t} | {c['통과']} | {c['오판 후보']} |" for t, c in sorted(by_t.items())]
     L += ["", "## 미확인·불일치 사유(상위 25)", ""]
     L += [f"- {v}건 — {k}" for k, v in det.most_common(25)]
+    L += ["", "## 교정 제안 세부 — 빈칸 채우기와 값 바꾸기는 성격이 다르다", "",
+          "빈칸 채우기는 게재본(또는 KCI 등록)이 빠뜨린 값을 채우라는 것이라 refcheck가 대체로 옳다.",
+          "**있는 값을 바꾸라는 제안**이 오판 후보의 핵심이다.", "",
+          "| 필드 | 빈칸 채우기 | 값 바꾸기 | 범위→첫 면 | 값 바꾸기의 근거 정보원 |",
+          "| --- | ---: | ---: | ---: | --- |"]
+    kinds = defaultdict(Counter)
+    srcs = defaultdict(Counter)
+    ydiff = Counter()
+    for r in rows:
+        for s in r["sugg"]:
+            f, c, n = s.get("field", "?"), str(s.get("current", "")), str(s.get("suggested", ""))
+            if c in ("", "(없음)"):
+                kinds[f]["fill"] += 1
+                continue
+            if f == "pages" and "-" in c and "-" not in n and c.split("-")[0].strip() == n.strip():
+                kinds[f]["first"] += 1
+            else:
+                kinds[f]["change"] += 1
+            srcs[f][s.get("source") or "?"] += 1
+            if f == "year" and c.isdigit() and n.isdigit():
+                ydiff[int(c) - int(n)] += 1
+    for f, k in sorted(kinds.items(), key=lambda kv: -sum(kv[1].values())):
+        L.append(f"| {f} | {k['fill']} | {k['change']} | {k['first'] or ''} | "
+                 + ", ".join(f"{s} {v}" for s, v in srcs[f].most_common()) + " |")
+    if ydiff:
+        L += ["", "연도 바꾸기 제안의 차이(게재본 − 제안): "
+              + ", ".join(f"{d:+d}년 {v}건" for d, v in sorted(ydiff.items(), key=lambda kv: -kv[1]))]
     return "\n".join(L) + "\n"
 
 
@@ -307,9 +367,18 @@ def main_cli() -> int:
     ap.add_argument("--only", nargs="*", default=list(JOURNALS), help="학회지 slug 골라 돌리기")
     ap.add_argument("--summary-only", action="store_true")
     ap.add_argument("--retry-failed", action="store_true", help="조회 실패가 있던 논문만 다시 조회")
+    ap.add_argument("--recompute", action="store_true",
+                    help="조회 없이 항목 구성·판정만 지금 코드로 다시 계산해 결과 파일을 갱신")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     done, rows = load_done()
+    if a.recompute:
+        rows = recompute(rows)
+        RESULTS.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                           encoding="utf-8")
+        SUMMARY.write_text(summarize(rows), encoding="utf-8")
+        print(SUMMARY.read_text(encoding="utf-8"))
+        return 0
     if a.retry_failed:
         redo = {r["art"] for r in rows if r.get("note") == "retry"}
         rows = [r for r in rows if r["art"] not in redo]

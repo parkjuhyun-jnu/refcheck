@@ -22,26 +22,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import audit_published as ap  # noqa: E402  (Claude API 차단·app 경로 설정을 함께 가져온다)
 
-formatter, main, rules = ap.formatter, ap.main, ap.rules
+rules = ap.rules
 
 
 def replay(row: dict) -> list[str]:
+    """기록된 항목·조회 결과로 판정을 다시 낸다 — 조회 단계와 같은 함수(ap.judge)를 쓴다."""
     e = rules.new_entry(row["entry"].get("raw", ""))
     e.update(row["entry"])
-    v = row["v"]
-    st = v.get("status", "")
-    flags = [f for f in row["flags"] if f.startswith("status:")]   # 조회 층 판정은 그대로
-    sugg, pnote = [], []
-    if st == "verified":
-        sugg = main._build_suggestions(e, v.get("meta"))
-        pnote = main._page_check_note(e, v.get("meta"))
-    formatted = formatter.format_entry(e, ap.JOURNALS[row["j"]][1])
-    issues = formatter.validate_entry(e) + formatter.lost_elements(e.get("raw", ""), formatted)
-    flags += ["suggest:" + s.get("field", "?") for s in sugg]
-    flags += ["page_note"] if pnote else []
-    flags += ["issue"] * bool(issues)
-    flags += ["loss:" + x for x in ap.field_loss(e, formatted)]
-    return flags
+    return ap.judge(row["j"], e, row["v"])["flags"]
 
 
 def main_cli() -> int:
