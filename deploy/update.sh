@@ -2,9 +2,9 @@
 # ============================================================
 # 앱 업데이트 — 업로드한 새 버전을 서비스 폴더에 반영하고 재시작
 #
-# 사용법:
-#   1) WinSCP로 writing_reference_agent 폴더 전체를 /root 에 덮어쓰기(업로드)
-#   2) 터미널에서:  bash /root/writing_reference_agent/deploy/update.sh
+# 사용법(2026-10-02부터 기본 — GitHub main을 받아 반영):
+#   ssh root@1.201.120.29 "cd /root/refcheck && git pull --ff-only && bash deploy/update.sh /root/refcheck"
+# 예비(파일을 직접 올린 경우): bash /root/writing_reference_agent/deploy/update.sh
 #
 # 코드 파일(app/·deploy/)만 갱신하며, 운영 데이터(.env·config.json·history/·
 # uploads/·styles/·*.json 로그)는 건드리지 않습니다.
@@ -15,7 +15,8 @@ SRC="${1:-/root/writing_reference_agent}"
 APP_DIR=/opt/refstd
 
 if [ ! -f "$SRC/app/main.py" ]; then
-  echo "오류: $SRC 에서 새 버전을 찾을 수 없습니다. WinSCP 업로드를 먼저 확인하세요."
+  echo "오류: $SRC 에서 새 버전을 찾을 수 없습니다. GitHub 방식이면 /root/refcheck 를 인자로 주세요"
+  echo "      (git clone 이 안 돼 있으면 배포가이드의 '처음 한 번' 절 참조)."
   exit 1
 fi
 if [ ! -d "$APP_DIR" ]; then
